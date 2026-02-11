@@ -1,0 +1,136 @@
+{
+  "version": "1.0-LITE",
+  "last_updated": "2025-01-01T00:00:00Z",
+  "optimization_status": "PENDING",
+  
+  "trading_pairs": {
+    "active_pairs": ["EURUSD", "GBPUSD"],
+    "primary_pair": "EURUSD",
+    "notes": "Update after MT5 optimizer determines best pairs"
+  },
+  
+  "optimized_parameters": {
+    "description": "Parameters from MT5 Strategy Tester Optimizer - UPDATE AFTER OPTIMIZATION",
+    
+    "ama_parameters": {
+      "fast_period": null,
+      "slow_period": null,
+      "ama_period": null,
+      "fast_ema_coefficient": null,
+      "slow_ema_coefficient": null,
+      "notes": "AMA (Adaptive Moving Average) indicator parameters"
+    },
+    
+    "entry_parameters": {
+      "entry_threshold": null,
+      "atr_multiplier": null,
+      "min_volatility": null,
+      "max_volatility": null,
+      "notes": "Entry signal thresholds and filters"
+    },
+    
+    "exit_parameters": {
+      "profit_target_pips": null,
+      "stop_loss_pips": null,
+      "trailing_stop_pips": null,
+      "breakeven_pips": null,
+      "notes": "Exit rules and risk management"
+    },
+    
+    "risk_parameters": {
+      "max_position_size": null,
+      "risk_per_trade_percent": null,
+      "max_drawdown_percent": null,
+      "notes": "Position sizing and risk limits"
+    },
+    
+    "timeframe_parameters": {
+      "primary_timeframe": "M15",
+      "confirmation_timeframe": "H4",
+      "notes": "M15 execution with H4 trend confirmation (migrated from M5/H1)"
+    }
+  },
+  
+  "feature_calculation": {
+    "description": "How features are calculated - uses optimized parameters",
+    "ma_periods": [5, 10, 20, 50, 100, 200],
+    "ema_periods": [5, 10, 20, 50],
+    "rsi_period": 14,
+    "atr_period": 14,
+    "bollinger_period": 20,
+    "bollinger_std": 2,
+    "macd_fast": 12,
+    "macd_slow": 26,
+    "macd_signal": 9,
+    "notes": "These will be updated based on optimizer results"
+  },
+  
+  "data_collection": {
+    "collection_interval_seconds": 2,
+    "min_samples_before_training": 10000,
+    "target_samples": 50000,
+    "collection_duration_days": 14,
+    "azure_storage": {
+      "file_share_name": "csv-exchange",
+      "input_path": "market_data/latest_features.csv",
+      "accumulated_path": "training_data/accumulated_features.csv",
+      "labeled_path": "training_data/labeled_data.csv"
+    }
+  },
+  
+  "labeling_strategy": {
+    "description": "How to label training data - M15 SWING TRADING CONFIG",
+    
+    "method": "forward_looking_profit",
+    
+    "forward_window_candles": 48,
+    "profit_threshold_pips": 20,
+    "loss_threshold_pips": 20,
+    "notes": "48 candles on M15 = 12 hours forward window (swing trades)",
+    
+    "labeling_rules": {
+      "BUY_label": "Price increased by profit_threshold_pips within forward_window",
+      "SELL_label": "Price decreased by profit_threshold_pips within forward_window",
+      "HOLD_label": "Price stayed within thresholds OR choppy movement"
+    },
+    
+    "quality_filters": {
+      "min_atr_pips": 5,
+      "max_spread_pips": 3,
+      "avoid_news_events": false,
+      "min_volume": 100
+    }
+  },
+  
+  "training_configuration": {
+    "train_split": 0.70,
+    "validation_split": 0.15,
+    "test_split": 0.15,
+    
+    "epochs": 50,
+    "batch_size": 32,
+    "learning_rate": 0.001,
+    
+    "early_stopping": {
+      "patience": 10,
+      "min_delta": 0.001
+    }
+  },
+  
+  "model_deployment": {
+    "confidence_threshold": 0.6,
+    "ensemble_voting": true,
+    "fallback_to_rules": true,
+    "notes": "Deployment settings for Azure Functions"
+  },
+  
+  "instructions": {
+    "step_1": "Run MT5 Strategy Tester Optimizer on your AMA scalper strategy",
+    "step_2": "Update 'optimized_parameters' section with best values from optimizer",
+    "step_3": "Update 'feature_calculation' if optimizer suggests different indicator periods",
+    "step_4": "Set 'optimization_status' to 'COMPLETE'",
+    "step_5": "Start data collection with 'python training/data_accumulator.py'",
+    "step_6": "After 2 weeks, label data with 'python training/data_labeler.py'",
+    "step_7": "Train model with 'python training/train_model.py'"
+  }
+}

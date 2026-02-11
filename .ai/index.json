@@ -1,0 +1,86 @@
+{
+  "_description": "AI Trading System - Index for AI Agent Parsing",
+  "_version": "1.0.0",
+  "_last_updated": "2025-02-11",
+
+  "system": {
+    "name": "AI Trading System",
+    "type": "Algorithmic Forex Trading",
+    "status": "LIVE",
+    "current_version": "v86",
+    "architecture": "Ensemble ML (XGBoost + LightGBM)"
+  },
+
+  "components": {
+    "lite_system": {
+      "status": "ACTIVE",
+      "main_file": "src/lite/live_trading_system_v6_solution7.py",
+      "description": "Lightweight ensemble trading system",
+      "files": [
+        "src/lite/live_trading_system_v6_solution7.py",
+        "src/lite/ensemble_predictor_v3_treebased.py",
+        "src/lite/feature_expander.py",
+        "src/lite/rule_based_strategies_v1_0.py",
+        "src/lite/news_integration.py"
+      ]
+    },
+    "full_system": {
+      "status": "PAUSED",
+      "description": "12-bot neural network system with transformer coordination",
+      "path": "src/full/"
+    },
+    "expert_advisors": {
+      "current_version": "v2.32",
+      "path": "expert_advisors/versions/v2_32/",
+      "description": "MQL5 EA for MT5 data extraction and trade execution"
+    },
+    "models": {
+      "current": "models/current/",
+      "type": "XGBoost + LightGBM",
+      "count": 16,
+      "pairs": 8
+    }
+  },
+
+  "data_locations": {
+    "code": "GitHub (this repo)",
+    "training_data": "Azure Blob Storage",
+    "execution_logs": "Azure Blob Storage",
+    "manifest": "DATA_MANIFEST.json"
+  },
+
+  "key_files": {
+    "entry_point": "src/lite/live_trading_system_v6_solution7.py",
+    "predictor": "src/lite/ensemble_predictor_v3_treebased.py",
+    "features": "src/lite/feature_expander.py",
+    "confluence": "src/lite/confluence/confluence_scorer.py",
+    "dimensions": "src/lite/dimensions/dimension_checker.py",
+    "danger": "src/lite/dimensions/danger_scorer.py",
+    "ea_current": "expert_advisors/versions/v2_32/BridgeEA_LITE_v2_32.mq5"
+  },
+
+  "documentation": {
+    "readme": "README.md",
+    "changelog": "CHANGELOG.md",
+    "timeline": "docs/VERSION_TIMELINE.md",
+    "data_manifest": "DATA_MANIFEST.json",
+    "handoffs": "docs/handoffs/"
+  },
+
+  "metrics": {
+    "model_accuracy": {
+      "average": 0.704,
+      "best_pair": "EURGBP",
+      "best_accuracy": 0.863
+    },
+    "features": 27,
+    "pairs_traded": 8
+  },
+
+  "parsing_hints": {
+    "start_with": ["README.md", "DATA_MANIFEST.json", ".ai/index.json"],
+    "understand_flow": ["docs/VERSION_TIMELINE.md", "CHANGELOG.md"],
+    "dive_into_code": ["src/lite/live_trading_system_v6_solution7.py"],
+    "understand_data": [".ai/schema/"]
+  }
+}

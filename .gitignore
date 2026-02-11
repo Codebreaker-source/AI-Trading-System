@@ -1,0 +1,79 @@
+# ========================================
+# AI Trading System - .gitignore
+# ========================================
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+venv_lite/
+.venv/
+ENV/
+env/
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# ---- Large Data Files (stored in Azure) ----
+# Training data
+*.csv
+!.ai/**/*.csv
+!docs/**/*.csv
+
+# Large logs
+*.log
+
+# Compiled MQL5
+*.ex5
+
+# Archives
+*.zip
+*.7z
+*.tar.gz
+
+# ---- Credentials & Secrets ----
+*.enc
+*.key
+.env
+.env.*
+*credentials*
+*secrets*
+azure_connection*
+broker_credentials*
+api_keys*
+
+# ---- IDE & OS ----
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---- Folders to exclude ----
+_SAFE_TO_DELETE/
+_NEEDS_REVIEW/
+node_modules/
+
+# ---- Temporary files ----
+*.tmp
+*.temp
+*.bak
+*~
+
+# ---- Jupyter ----
+.ipynb_checkpoints/
+*.ipynb
+
+# ========================================
+# KEEP these (override above)
+# ========================================
+# Small config CSVs if any
+!config/*.csv
+# Schema examples
+!.ai/schema/*.example.csv

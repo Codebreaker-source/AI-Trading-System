@@ -1,0 +1,91 @@
+{
+  "_description": "Data manifest for AI Trading System - maps code to data stored in Azure Blob Storage",
+  "_azure_base_url": "https://tradingsystem12345.file.core.windows.net/csv-exchange",
+  "_last_updated": "2025-02-11",
+  "_version": "1.0.0",
+
+  "training_data": {
+    "current": {
+      "train": {
+        "path": "training/train_data.csv",
+        "azure_url": "https://tradingsystem12345.file.core.windows.net/csv-exchange/training/train_data.csv",
+        "size_mb": 1136,
+        "rows": "~1.6M",
+        "description": "Primary training dataset - 58 features, M5 timeframe"
+      },
+      "val": {
+        "path": "training/val_data.csv",
+        "azure_url": "https://tradingsystem12345.file.core.windows.net/csv-exchange/training/val_data.csv",
+        "size_mb": 243,
+        "description": "Validation dataset"
+      },
+      "test": {
+        "path": "training/test_data.csv",
+        "azure_url": "https://tradingsystem12345.file.core.windows.net/csv-exchange/training/test_data.csv",
+        "size_mb": 244,
+        "description": "Test dataset"
+      }
+    },
+    "historical": {
+      "description": "Previous training data versions",
+      "path": "training/historical/",
+      "azure_url": "https://tradingsystem12345.file.core.windows.net/csv-exchange/training_data/backups/"
+    }
+  },
+
+  "execution_logs": {
+    "predictions": {
+      "current": {
+        "path": "logs/predictions_v6_demo.csv",
+        "azure_url": "https://tradingsystem12345.file.core.windows.net/csv-exchange/logs/predictions_v6_demo.csv",
+        "description": "Live prediction logs from v6 system"
+      },
+      "historical": {
+        "path": "logs/predictions/",
+        "azure_url": "https://tradingsystem12345.file.core.windows.net/csv-exchange/logs/predictions/"
+      }
+    },
+    "trades": {
+      "current": {
+        "path": "logs/trades_v3_B1_demo.csv",
+        "azure_url": "https://tradingsystem12345.file.core.windows.net/csv-exchange/logs/trades_v3_B1_demo.csv",
+        "description": "Executed trades log"
+      }
+    },
+    "expanded_features": {
+      "path": "logs/expanded_features_v6_demo.csv",
+      "azure_url": "https://tradingsystem12345.file.core.windows.net/csv-exchange/logs/expanded_features_v6_demo.csv",
+      "size_mb": 1604,
+      "description": "Real-time expanded features during execution"
+    },
+    "system_logs": {
+      "path": "logs/system_v6_demo.log",
+      "azure_url": "https://tradingsystem12345.file.core.windows.net/csv-exchange/logs/system_v6_demo.log"
+    }
+  },
+
+  "backups": {
+    "full_system_backup": {
+      "path": "backups/Phase4_LITE_System_111925.zip",
+      "azure_url": "https://tradingsystem12345.file.core.windows.net/csv-exchange/Trading%20System%20Entire%20Backup%20111925/Phase4_LITE_System_111925.zip",
+      "size_mb": 3180,
+      "date": "2025-11-19",
+      "description": "Complete system backup including all data"
+    }
+  },
+
+  "schemas": {
+    "predictions": {
+      "columns": ["timestamp", "symbol", "prediction", "confidence", "ml_confidence", "confluence", "action"],
+      "description": "Schema for prediction log files"
+    },
+    "trades": {
+      "columns": ["timestamp", "symbol", "direction", "entry_price", "stop_loss", "take_profit", "lot_size", "ticket"],
+      "description": "Schema for trade execution files"
+    },
+    "training_data": {
+      "columns": ["timestamp", "symbol", "58 features...", "label"],
+      "description": "Schema for training datasets"
+    }
+  }
+}

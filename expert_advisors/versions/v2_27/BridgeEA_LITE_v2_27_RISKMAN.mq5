@@ -1,0 +1,1647 @@
+//+------------------------------------------------------------------+
+//|                              BridgeEA_LITE_v2_27_RISKMAN.mq5       |
+//|                                            AI Trading System      |
+//|     COMPREHENSIVE RISK MANAGEMENT UPDATE                          |
+//+------------------------------------------------------------------+
+#property copyright "AI Trading System"
+#property link      ""
+#property version   "2.27"
+#property description "Bridge EA v2.27 - COMPREHENSIVE RISK MANAGEMENT"
+#property description "NEW: 3% Max Daily Loss Limit"
+#property description "NEW: Max 10 Total Positions"
+#property description "NEW: Portfolio Risk Cap"
+#property description "NEW: Fixed 0.01 Lot Size"
+#property description "NEW: Close All in Profit at 5% Equity Gain"
+#property description "KEEP: Break-even, Trailing Stop, M15+H4"
+
+//--- Input Parameters
+input int TimerSeconds = 3;              // Timer interval (seconds)
+
+//--- RISK MANAGEMENT PARAMETERS (UPDATED in v2.27)
+input double FixedLotSize = 0.01;        // Fixed lot size (no confidence scaling)
+input double MinConfidence = 0.60;       // Minimum confidence threshold
+input double MaxDailyLossPercent = 3.0;  // Max daily loss before stopping (%)
+input int MaxTotalPositions = 10;        // Maximum total open positions
+input double MaxPortfolioRiskPercent = 2.0;  // Max portfolio risk (%)
+input double TakeProfitEquityPercent = 5.0;  // Close all profitable when equity up this %
+input int MaxCorrelationExposure = 2;    // Max positions per correlation group (NEW Task 3)
+
+//--- EQUITY CURVE TRAILING PARAMETERS (NEW Task 5)
+input bool EnableEquityCurveTrailing = true;   // Enable equity curve trailing
+input double EquityDrawdownThreshold = 3.0;    // Drawdown % to PAUSE new trades (3%)
+
+//--- VOLATILITY REGIME FILTER PARAMETERS (NEW Task 6)
+input bool EnableVolatilityFilter = true;      // Enable volatility regime filter
+input double MinATRPips = 8.0;                 // Minimum ATR in pips (too quiet = no trade)
+input double MaxATRPips = 100.0;               // Maximum ATR in pips (too volatile = no trade)
+
+input int Slippage = 10;                 // Slippage in points
+input int MagicNumber = 20251129;        // Magic number for trades
+input double MaxSpreadPips = 5.0;        // Maximum spread for entry
+input double RiskRewardRatio = 2.0;      // Risk/Reward ratio (2:1 = 2.0)
+input double SL_ATR_Multiplier = 2.0;    // Stop loss = ATR * multiplier
+input bool EnableTrading = true;         // Enable trade execution
+input bool LogVerbose = true;            // Verbose logging
+
+//--- BREAK-EVEN & TRAILING STOP PARAMETERS
+input bool EnableBreakEven = true;       // Enable break-even logic
+input bool EnableTrailing = true;        // Enable trailing stop
+input double BE_TriggerRR = 1.0;         // BE trigger at this R:R (1.0 = 1:1)
+input double BE_BufferPips = 5.0;        // Buffer above entry for BE (pips)
+input double Trail_ATR_Multiplier = 2.0; // Trail distance = ATR * multiplier
+input int TrailCheckSeconds = 5;         // How often to check trailing (seconds)
+
+//--- Technical Indicator Parameters
+input int FastEMA_Period = 12;           // Fast EMA period
+input int SlowEMA_Period = 26;           // Slow EMA period
+input int RSI_Period = 14;               // RSI period
+input int ATR_Period = 14;               // ATR period
+input int BB_Period = 20;                // Bollinger Bands period
+input double BB_Deviation = 2.0;         // Bollinger Bands deviation
+input int Stoch_K = 14;                  // Stochastic %K period
+input int Stoch_D = 3;                   // Stochastic %D period
+input int Stoch_Slowing = 3;             // Stochastic slowing
+input int SMA20_Period = 20;             // SMA 20 period
+input int SMA50_Period = 50;             // SMA 50 period
+input ENUM_TIMEFRAMES HTF_Timeframe = PERIOD_H4;  // Higher timeframe (H4)
+
+//--- Currency Pairs
+string g_pairs[8] = {
+    "EURUSD.sim", "GBPUSD.sim", "USDJPY.sim", "USDCHF.sim",
+    "AUDUSD.sim", "USDCAD.sim", "NZDUSD.sim", "EURGBP.sim"
+};
+
+//--- File paths
+string g_featuresFile = "latest_features.csv";
+string g_commandsFile = "trade_commands.csv";
+string g_tradesLogFile = "trades_execution_log.csv";
+string g_positionsFile = "open_positions.csv";
+
+//--- Indicator Handles
+int g_fastEMA_handles[8];
+int g_slowEMA_handles[8];
+int g_rsi_handles[8];
+int g_atr_handles[8];
+int g_bb_handles[8];
+int g_stoch_handles[8];
+int g_sma20_handles[8];
+int g_sma50_handles[8];
+int g_htfFastEMA_handles[8];
+int g_htfSlowEMA_handles[8];
+
+//--- Trade tracking
+datetime g_lastCommandTime = 0;
+string g_lastCommandHash = "";
+bool g_logHeaderWritten = false;
+
+//--- BE/Trailing tracking
+datetime g_lastTrailCheck = 0;
+int g_beTriggeredCount = 0;
+int g_trailAdjustedCount = 0;
+
+//--- DAILY LOSS LIMIT TRACKING (NEW in v2.27)
+double g_dayStartEquity = 0;
+double g_dayStartBalance = 0;
+int g_currentDay = -1;
+bool g_dailyLossLimitHit = false;
+int g_dailyTradesBlocked = 0;
+
+//--- Portfolio Risk Tracking (NEW - Task 2)
+double g_currentPortfolioRisk = 0;  // Current total risk in dollars
+
+//--- Equity Curve Trailing Tracking (NEW - Task 5)
+double g_peakEquity = 0;              // Highest equity observed
+double g_currentDrawdownPercent = 0; // Current drawdown from peak
+bool g_inDrawdownMode = false;        // True when lot size is reduced
+
+#include <Trade\Trade.mqh>
+CTrade g_trade;
+
+
+//+------------------------------------------------------------------+
+//| Expert initialization function                                     |
+//+------------------------------------------------------------------+
+int OnInit()
+{
+    Print("================================================================");
+    Print("  BridgeEA_LITE_v2_27 - COMPREHENSIVE RISK MANAGEMENT");
+    Print("================================================================");
+    Print("  RISK LIMITS:");
+    Print("    - Max Daily Loss: ", MaxDailyLossPercent, "%");
+    Print("    - Max Total Positions: ", MaxTotalPositions);
+    Print("    - Max Portfolio Risk: ", MaxPortfolioRiskPercent, "%");
+    Print("    - Max Correlation Exposure: ", MaxCorrelationExposure, " per group");
+    Print("    - Fixed Lot Size: ", FixedLotSize);
+    Print("    - Take Profit at Equity +", TakeProfitEquityPercent, "%");
+    Print("    - Equity Curve Trailing: ", EnableEquityCurveTrailing ? "ON" : "OFF", 
+          " (PAUSE trades when DD >= ", EquityDrawdownThreshold, "%)");
+    Print("    - Volatility Filter: ", EnableVolatilityFilter ? "ON" : "OFF",
+          " (ATR range: ", MinATRPips, "-", MaxATRPips, " pips)");
+    Print("  EXECUTION: M15 timeframe, H4 HTF confirmation");
+    Print("  BE/TRAIL: ", EnableBreakEven ? "ON" : "OFF", " / ", EnableTrailing ? "ON" : "OFF");
+    
+    //--- Initialize daily tracking
+    InitializeDailyTracking();
+    
+    //--- Initialize equity curve tracking (NEW Task 5)
+    InitializeEquityCurveTracking();
+    
+    //--- Validate chart timeframe
+    if(Period() != PERIOD_M15)
+    {
+        Print("WARNING: Optimized for M15 charts! Current: ", EnumToString(Period()));
+    }
+    
+    //--- Initialize indicators
+    bool init_success = true;
+    for(int i = 0; i < ArraySize(g_pairs); i++)
+    {
+        string pair = g_pairs[i];
+        
+        g_fastEMA_handles[i] = iMA(pair, 0, FastEMA_Period, 0, MODE_EMA, PRICE_CLOSE);
+        g_slowEMA_handles[i] = iMA(pair, 0, SlowEMA_Period, 0, MODE_EMA, PRICE_CLOSE);
+        g_rsi_handles[i] = iRSI(pair, 0, RSI_Period, PRICE_CLOSE);
+        g_atr_handles[i] = iATR(pair, 0, ATR_Period);
+        g_bb_handles[i] = iBands(pair, 0, BB_Period, 0, BB_Deviation, PRICE_CLOSE);
+        g_stoch_handles[i] = iStochastic(pair, 0, Stoch_K, Stoch_D, Stoch_Slowing, MODE_SMA, STO_LOWHIGH);
+        g_sma20_handles[i] = iMA(pair, 0, SMA20_Period, 0, MODE_SMA, PRICE_CLOSE);
+        g_sma50_handles[i] = iMA(pair, 0, SMA50_Period, 0, MODE_SMA, PRICE_CLOSE);
+        g_htfFastEMA_handles[i] = iMA(pair, HTF_Timeframe, FastEMA_Period, 0, MODE_EMA, PRICE_CLOSE);
+        g_htfSlowEMA_handles[i] = iMA(pair, HTF_Timeframe, SlowEMA_Period, 0, MODE_EMA, PRICE_CLOSE);
+        
+        if(g_fastEMA_handles[i] == INVALID_HANDLE || g_atr_handles[i] == INVALID_HANDLE)
+        {
+            Print("ERROR: Failed to initialize indicators for ", pair);
+            init_success = false;
+        }
+    }
+    
+    if(!init_success)
+        return INIT_FAILED;
+    
+    //--- Setup trade object
+    g_trade.SetExpertMagicNumber(MagicNumber);
+    g_trade.SetDeviationInPoints(Slippage);
+    g_trade.SetTypeFilling(ORDER_FILLING_FOK);
+    
+    EventSetTimer(TimerSeconds);
+    InitializeTradeLog();
+    
+    Print("SUCCESS: BridgeEA v2.27 initialized");
+    Print("   Starting Equity: $", DoubleToString(g_dayStartEquity, 2));
+    Print("   Daily Loss Limit: $", DoubleToString(g_dayStartEquity * MaxDailyLossPercent / 100, 2));
+    
+    return INIT_SUCCEEDED;
+}
+
+//+------------------------------------------------------------------+
+//| Initialize daily tracking variables                                |
+//+------------------------------------------------------------------+
+void InitializeDailyTracking()
+{
+    g_dayStartEquity = AccountInfoDouble(ACCOUNT_EQUITY);
+    g_dayStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+    
+    MqlDateTime dt;
+    TimeToStruct(TimeCurrent(), dt);
+    g_currentDay = dt.day_of_year;
+    
+    g_dailyLossLimitHit = false;
+    g_dailyTradesBlocked = 0;
+    
+    Print("[DAILY RESET] Day ", g_currentDay, " | Start Equity: $", 
+          DoubleToString(g_dayStartEquity, 2));
+}
+
+//+------------------------------------------------------------------+
+//| Check if new day and reset tracking                                |
+//+------------------------------------------------------------------+
+void CheckNewDay()
+{
+    MqlDateTime dt;
+    TimeToStruct(TimeCurrent(), dt);
+    int today = dt.day_of_year;
+    
+    if(today != g_currentDay)
+    {
+        Print("[NEW DAY] Resetting daily tracking from day ", g_currentDay, " to ", today);
+        InitializeDailyTracking();
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Check daily loss limit - returns true if trading allowed           |
+//+------------------------------------------------------------------+
+bool CheckDailyLossLimit()
+{
+    //--- Check for new day first
+    CheckNewDay();
+    
+    //--- If already hit limit today, stay blocked
+    if(g_dailyLossLimitHit)
+    {
+        return false;
+    }
+    
+    //--- Calculate current daily P&L
+    double current_equity = AccountInfoDouble(ACCOUNT_EQUITY);
+    double daily_pnl = current_equity - g_dayStartEquity;
+    double daily_pnl_percent = (daily_pnl / g_dayStartEquity) * 100.0;
+    
+    //--- Check if loss limit exceeded
+    if(daily_pnl_percent <= -MaxDailyLossPercent)
+    {
+        g_dailyLossLimitHit = true;
+        Print("╔════════════════════════════════════════════════════════════╗");
+        Print("║  ⛔ DAILY LOSS LIMIT HIT - TRADING HALTED FOR TODAY        ║");
+        Print("╠════════════════════════════════════════════════════════════╣");
+        Print("║  Start Equity: $", DoubleToString(g_dayStartEquity, 2));
+        Print("║  Current Equity: $", DoubleToString(current_equity, 2));
+        Print("║  Daily P&L: $", DoubleToString(daily_pnl, 2), " (", DoubleToString(daily_pnl_percent, 2), "%)");
+        Print("║  Limit: -", DoubleToString(MaxDailyLossPercent, 1), "%");
+        Print("╚════════════════════════════════════════════════════════════╝");
+        return false;
+    }
+    
+    return true;
+}
+
+//+------------------------------------------------------------------+
+//| Get current daily P&L info for logging                             |
+//+------------------------------------------------------------------+
+string GetDailyPnLStatus()
+{
+    double current_equity = AccountInfoDouble(ACCOUNT_EQUITY);
+    double daily_pnl = current_equity - g_dayStartEquity;
+    double daily_pnl_percent = (daily_pnl / g_dayStartEquity) * 100.0;
+    double remaining = MaxDailyLossPercent + daily_pnl_percent;
+    
+    return StringFormat("Daily P&L: $%.2f (%.2f%%) | Remaining: %.2f%%",
+                        daily_pnl, daily_pnl_percent, remaining);
+}
+
+//+------------------------------------------------------------------+
+//| PORTFOLIO RISK MANAGEMENT (NEW - Task 2)                           |
+//+------------------------------------------------------------------+
+
+//+------------------------------------------------------------------+
+//| Get pip value for a symbol                                         |
+//+------------------------------------------------------------------+
+double GetPipValue(string symbol)
+{
+    int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+    double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+    
+    // For 5-digit or 3-digit pairs, pip = 10 points
+    if(digits == 5 || digits == 3)
+        return point * 10;
+    else
+        return point;
+}
+
+//+------------------------------------------------------------------+
+//| Get pip dollar value for a symbol (per 0.01 lot)                   |
+//+------------------------------------------------------------------+
+double GetPipDollarValue(string symbol)
+{
+    // Approximate pip values per 0.01 lot for major pairs
+    string base = symbol;
+    StringReplace(base, ".sim", "");
+    
+    if(base == "EURUSD" || base == "GBPUSD" || base == "AUDUSD" || base == "NZDUSD")
+        return 0.10;  // $0.10 per pip per 0.01 lot
+    else if(base == "USDJPY")
+        return 0.067; // Approx $0.067 per pip
+    else if(base == "USDCHF" || base == "USDCAD")
+        return 0.075; // Approx $0.075 per pip
+    else if(base == "EURGBP")
+        return 0.125; // Approx $0.125 per pip
+    else
+        return 0.10;  // Default
+}
+
+//+------------------------------------------------------------------+
+//| Calculate risk for a single position                               |
+//+------------------------------------------------------------------+
+double CalculatePositionRisk(string symbol, double entry_price, double stop_loss, double lot_size)
+{
+    double pip_value = GetPipValue(symbol);
+    double pip_dollar = GetPipDollarValue(symbol);
+    
+    if(pip_value <= 0) return 0;
+    
+    double sl_pips = MathAbs(entry_price - stop_loss) / pip_value;
+    double risk_dollars = sl_pips * pip_dollar * (lot_size / 0.01);
+    
+    return risk_dollars;
+}
+
+//+------------------------------------------------------------------+
+//| Calculate total portfolio risk from all open positions            |
+//+------------------------------------------------------------------+
+double CalculateCurrentPortfolioRisk()
+{
+    double total_risk = 0;
+    int total = PositionsTotal();
+    
+    for(int i = 0; i < total; i++)
+    {
+        ulong ticket = PositionGetTicket(i);
+        if(ticket == 0) continue;
+        
+        if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+        
+        string symbol = PositionGetString(POSITION_SYMBOL);
+        double entry = PositionGetDouble(POSITION_PRICE_OPEN);
+        double sl = PositionGetDouble(POSITION_SL);
+        double volume = PositionGetDouble(POSITION_VOLUME);
+        
+        if(sl <= 0) continue;  // No SL = can't calculate risk
+        
+        double pos_risk = CalculatePositionRisk(symbol, entry, sl, volume);
+        total_risk += pos_risk;
+    }
+    
+    g_currentPortfolioRisk = total_risk;
+    return total_risk;
+}
+
+//+------------------------------------------------------------------+
+//| Check if new position would exceed portfolio risk limit            |
+//+------------------------------------------------------------------+
+bool CheckPortfolioRiskLimit(string symbol, string action, double lot_size, double &new_risk)
+{
+    double account_balance = AccountInfoDouble(ACCOUNT_BALANCE);
+    double max_risk_dollars = account_balance * (MaxPortfolioRiskPercent / 100.0);
+    
+    // Get current portfolio risk
+    double current_risk = CalculateCurrentPortfolioRisk();
+    
+    // Calculate risk for new position
+    double atr = GetATRValue(symbol);
+    double sl_distance = atr * SL_ATR_Multiplier;
+    
+    double entry_price = 0;
+    if(action == "BUY")
+        entry_price = SymbolInfoDouble(symbol, SYMBOL_ASK);
+    else
+        entry_price = SymbolInfoDouble(symbol, SYMBOL_BID);
+    
+    double sl_price = 0;
+    if(action == "BUY")
+        sl_price = entry_price - sl_distance;
+    else
+        sl_price = entry_price + sl_distance;
+    
+    new_risk = CalculatePositionRisk(symbol, entry_price, sl_price, lot_size);
+    
+    double projected_total = current_risk + new_risk;
+    double projected_percent = (projected_total / account_balance) * 100.0;
+    
+    if(projected_total > max_risk_dollars)
+    {
+        Print("╔════════════════════════════════════════════════════════════╗");
+        Print("║  ⛔ PORTFOLIO RISK LIMIT - TRADE BLOCKED                   ║");
+        Print("╠════════════════════════════════════════════════════════════╣");
+        Print("║  Current Risk: $", DoubleToString(current_risk, 2), 
+              " (", DoubleToString((current_risk/account_balance)*100, 2), "%)");
+        Print("║  New Trade Risk: $", DoubleToString(new_risk, 2));
+        Print("║  Projected Total: $", DoubleToString(projected_total, 2),
+              " (", DoubleToString(projected_percent, 2), "%)");
+        Print("║  Max Allowed: $", DoubleToString(max_risk_dollars, 2),
+              " (", DoubleToString(MaxPortfolioRiskPercent, 1), "%)");
+        Print("╚════════════════════════════════════════════════════════════╝");
+        return false;
+    }
+    
+    return true;
+}
+
+//+------------------------------------------------------------------+
+//| Get portfolio risk status string                                   |
+//+------------------------------------------------------------------+
+string GetPortfolioRiskStatus()
+{
+    double account_balance = AccountInfoDouble(ACCOUNT_BALANCE);
+    double current_risk = CalculateCurrentPortfolioRisk();
+    double risk_percent = (current_risk / account_balance) * 100.0;
+    double max_risk = account_balance * (MaxPortfolioRiskPercent / 100.0);
+    double available = max_risk - current_risk;
+    
+    return StringFormat("Portfolio Risk: $%.2f (%.2f%%) | Available: $%.2f",
+                        current_risk, risk_percent, available);
+}
+
+//+------------------------------------------------------------------+
+//| CORRELATION EXPOSURE MANAGEMENT (NEW - Task 3)                     |
+//+------------------------------------------------------------------+
+
+//+------------------------------------------------------------------+
+//| Get correlation group for a symbol (0-3)                           |
+//| Group 0: European (EURUSD, GBPUSD, EURGBP) - highly correlated    |
+//| Group 1: Antipodean (AUDUSD, NZDUSD) - highly correlated          |
+//| Group 2: USD-base (USDJPY, USDCHF, USDCAD) - moderate correlation |
+//| Group 3: Uncategorized                                             |
+//+------------------------------------------------------------------+
+int GetCorrelationGroup(string symbol)
+{
+    string base = symbol;
+    StringReplace(base, ".sim", "");
+    
+    // Group 0: European pairs (correlation ~0.85+)
+    if(base == "EURUSD" || base == "GBPUSD" || base == "EURGBP")
+        return 0;
+    
+    // Group 1: Antipodean pairs (correlation ~0.90+)
+    if(base == "AUDUSD" || base == "NZDUSD")
+        return 1;
+    
+    // Group 2: USD-base pairs (moderate correlation)
+    if(base == "USDJPY" || base == "USDCHF" || base == "USDCAD")
+        return 2;
+    
+    // Group 3: Uncategorized
+    return 3;
+}
+
+//+------------------------------------------------------------------+
+//| Get correlation group name for logging                             |
+//+------------------------------------------------------------------+
+string GetCorrelationGroupName(int group)
+{
+    switch(group)
+    {
+        case 0: return "European (EUR/GBP)";
+        case 1: return "Antipodean (AUD/NZD)";
+        case 2: return "USD-Base (JPY/CHF/CAD)";
+        default: return "Other";
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Count positions in a correlation group                             |
+//+------------------------------------------------------------------+
+int CountPositionsInCorrelationGroup(int target_group)
+{
+    int count = 0;
+    int total = PositionsTotal();
+    
+    for(int i = 0; i < total; i++)
+    {
+        ulong ticket = PositionGetTicket(i);
+        if(ticket == 0) continue;
+        
+        if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+        
+        string symbol = PositionGetString(POSITION_SYMBOL);
+        int group = GetCorrelationGroup(symbol);
+        
+        if(group == target_group)
+            count++;
+    }
+    
+    return count;
+}
+
+//+------------------------------------------------------------------+
+//| Check if new position would exceed correlation exposure limit      |
+//+------------------------------------------------------------------+
+bool CheckCorrelationExposure(string symbol)
+{
+    int group = GetCorrelationGroup(symbol);
+    int current_count = CountPositionsInCorrelationGroup(group);
+    
+    if(current_count >= MaxCorrelationExposure)
+    {
+        string group_name = GetCorrelationGroupName(group);
+        Print("╔════════════════════════════════════════════════════════════╗");
+        Print("║  ⛔ CORRELATION EXPOSURE LIMIT - TRADE BLOCKED             ║");
+        Print("╠════════════════════════════════════════════════════════════╣");
+        Print("║  Symbol: ", symbol);
+        Print("║  Correlation Group: ", group_name);
+        Print("║  Current Positions in Group: ", current_count);
+        Print("║  Max Allowed: ", MaxCorrelationExposure);
+        Print("╚════════════════════════════════════════════════════════════╝");
+        return false;
+    }
+    
+    return true;
+}
+
+//+------------------------------------------------------------------+
+//| Get correlation exposure status for logging                        |
+//+------------------------------------------------------------------+
+string GetCorrelationExposureStatus()
+{
+    int group0 = CountPositionsInCorrelationGroup(0);
+    int group1 = CountPositionsInCorrelationGroup(1);
+    int group2 = CountPositionsInCorrelationGroup(2);
+    
+    return StringFormat("Corr: EUR=%d/%d, ANZ=%d/%d, USD=%d/%d",
+                        group0, MaxCorrelationExposure,
+                        group1, MaxCorrelationExposure,
+                        group2, MaxCorrelationExposure);
+}
+
+//+------------------------------------------------------------------+
+//| EQUITY CURVE TRAILING (NEW - Task 5)                               |
+//| PAUSES new trades when drawdown exceeds threshold                  |
+//| Fixed lot size 0.01 always - no scaling                            |
+//+------------------------------------------------------------------+
+
+//+------------------------------------------------------------------+
+//| Initialize equity curve tracking                                   |
+//+------------------------------------------------------------------+
+void InitializeEquityCurveTracking()
+{
+    g_peakEquity = AccountInfoDouble(ACCOUNT_EQUITY);
+    g_currentDrawdownPercent = 0;
+    g_inDrawdownMode = false;
+    
+    Print("[EQUITY CURVE] Initialized | Peak: $", DoubleToString(g_peakEquity, 2));
+}
+
+//+------------------------------------------------------------------+
+//| Update equity curve tracking (call on each timer)                  |
+//+------------------------------------------------------------------+
+void UpdateEquityCurveTracking()
+{
+    if(!EnableEquityCurveTrailing) return;
+    
+    double current_equity = AccountInfoDouble(ACCOUNT_EQUITY);
+    
+    //--- Update peak if new high
+    if(current_equity > g_peakEquity)
+    {
+        g_peakEquity = current_equity;
+        
+        //--- Exit drawdown mode if we were in it
+        if(g_inDrawdownMode)
+        {
+            g_inDrawdownMode = false;
+            Print("╔════════════════════════════════════════════════════════════╗");
+            Print("║  ✅ EQUITY RECOVERED - TRADING RESUMED                     ║");
+            Print("╠════════════════════════════════════════════════════════════╣");
+            Print("║  New Peak Equity: $", DoubleToString(g_peakEquity, 2));
+            Print("║  Lot Size: ", DoubleToString(FixedLotSize, 2), " (fixed)");
+            Print("╚════════════════════════════════════════════════════════════╝");
+        }
+    }
+    
+    //--- Calculate current drawdown
+    g_currentDrawdownPercent = ((g_peakEquity - current_equity) / g_peakEquity) * 100.0;
+    
+    //--- Check if we should enter drawdown mode (PAUSE trading)
+    if(!g_inDrawdownMode && g_currentDrawdownPercent >= EquityDrawdownThreshold)
+    {
+        g_inDrawdownMode = true;
+        Print("╔════════════════════════════════════════════════════════════╗");
+        Print("║  ⚠️ EQUITY DRAWDOWN - NEW TRADES PAUSED                    ║");
+        Print("╠════════════════════════════════════════════════════════════╣");
+        Print("║  Peak Equity: $", DoubleToString(g_peakEquity, 2));
+        Print("║  Current Equity: $", DoubleToString(current_equity, 2));
+        Print("║  Drawdown: ", DoubleToString(g_currentDrawdownPercent, 2), "%");
+        Print("║  Threshold: ", DoubleToString(EquityDrawdownThreshold, 1), "%");
+        Print("║  Action: NO NEW TRADES until equity recovers above peak");
+        Print("╚════════════════════════════════════════════════════════════╝");
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Check if equity curve allows new trades                            |
+//+------------------------------------------------------------------+
+bool CheckEquityCurveAllowsTrading()
+{
+    if(!EnableEquityCurveTrailing)
+        return true;  // Disabled = always allow
+    
+    return !g_inDrawdownMode;  // Allow if NOT in drawdown mode
+}
+
+//+------------------------------------------------------------------+
+//| Get equity curve status string                                     |
+//+------------------------------------------------------------------+
+string GetEquityCurveStatus()
+{
+    if(!EnableEquityCurveTrailing)
+        return "EqCurve: DISABLED";
+    
+    string mode = g_inDrawdownMode ? "PAUSED" : "ACTIVE";
+    return StringFormat("EqCurve: %s | Peak=$%.0f | DD=%.1f%%",
+                        mode, g_peakEquity, g_currentDrawdownPercent);
+}
+
+//+------------------------------------------------------------------+
+//| VOLATILITY REGIME FILTER (NEW - Task 6)                            |
+//| Pauses trading during extreme volatility (too high or too low)     |
+//+------------------------------------------------------------------+
+
+//+------------------------------------------------------------------+
+//| Convert ATR value to pips for a symbol                             |
+//+------------------------------------------------------------------+
+double ATRToPips(string symbol, double atr_value)
+{
+    int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+    double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+    
+    // For 5-digit or 3-digit pairs, pip = 10 points
+    double pip_size = (digits == 5 || digits == 3) ? point * 10 : point;
+    
+    if(pip_size <= 0) return 0;
+    
+    return atr_value / pip_size;
+}
+
+//+------------------------------------------------------------------+
+//| Check volatility regime for a symbol                               |
+//| Returns: true if volatility is acceptable, false if extreme        |
+//+------------------------------------------------------------------+
+bool CheckVolatilityRegime(string symbol, double &atr_pips, string &regime)
+{
+    if(!EnableVolatilityFilter)
+    {
+        regime = "DISABLED";
+        atr_pips = 0;
+        return true;
+    }
+    
+    double atr_value = GetATRValue(symbol);
+    atr_pips = ATRToPips(symbol, atr_value);
+    
+    //--- Check for too low volatility (market too quiet)
+    if(atr_pips < MinATRPips)
+    {
+        regime = "TOO_QUIET";
+        return false;
+    }
+    
+    //--- Check for too high volatility (market too chaotic)
+    if(atr_pips > MaxATRPips)
+    {
+        regime = "TOO_VOLATILE";
+        return false;
+    }
+    
+    //--- Normal volatility
+    regime = "NORMAL";
+    return true;
+}
+
+//+------------------------------------------------------------------+
+//| Get volatility status string for logging                           |
+//+------------------------------------------------------------------+
+string GetVolatilityStatus(string symbol)
+{
+    if(!EnableVolatilityFilter)
+        return "Vol: DISABLED";
+    
+    double atr_pips = 0;
+    string regime = "";
+    CheckVolatilityRegime(symbol, atr_pips, regime);
+    
+    return StringFormat("Vol: %s (%.1f pips)", regime, atr_pips);
+}
+
+
+//+------------------------------------------------------------------+
+//| Expert deinitialization function                                   |
+//+------------------------------------------------------------------+
+void OnDeinit(const int reason)
+{
+    EventKillTimer();
+    
+    for(int i = 0; i < ArraySize(g_pairs); i++)
+    {
+        if(g_fastEMA_handles[i] != INVALID_HANDLE) IndicatorRelease(g_fastEMA_handles[i]);
+        if(g_slowEMA_handles[i] != INVALID_HANDLE) IndicatorRelease(g_slowEMA_handles[i]);
+        if(g_rsi_handles[i] != INVALID_HANDLE) IndicatorRelease(g_rsi_handles[i]);
+        if(g_atr_handles[i] != INVALID_HANDLE) IndicatorRelease(g_atr_handles[i]);
+        if(g_bb_handles[i] != INVALID_HANDLE) IndicatorRelease(g_bb_handles[i]);
+        if(g_stoch_handles[i] != INVALID_HANDLE) IndicatorRelease(g_stoch_handles[i]);
+        if(g_sma20_handles[i] != INVALID_HANDLE) IndicatorRelease(g_sma20_handles[i]);
+        if(g_sma50_handles[i] != INVALID_HANDLE) IndicatorRelease(g_sma50_handles[i]);
+        if(g_htfFastEMA_handles[i] != INVALID_HANDLE) IndicatorRelease(g_htfFastEMA_handles[i]);
+        if(g_htfSlowEMA_handles[i] != INVALID_HANDLE) IndicatorRelease(g_htfSlowEMA_handles[i]);
+    }
+    
+    //--- Final daily summary
+    double final_equity = AccountInfoDouble(ACCOUNT_EQUITY);
+    double daily_pnl = final_equity - g_dayStartEquity;
+    
+    Print("╔════════════════════════════════════════════════════════════╗");
+    Print("║  BridgeEA v2.27 SESSION SUMMARY                            ║");
+    Print("╠════════════════════════════════════════════════════════════╣");
+    Print("║  Start Equity: $", DoubleToString(g_dayStartEquity, 2));
+    Print("║  Final Equity: $", DoubleToString(final_equity, 2));
+    Print("║  Session P&L: $", DoubleToString(daily_pnl, 2));
+    Print("║  BE Triggered: ", g_beTriggeredCount);
+    Print("║  Trail Adjusted: ", g_trailAdjustedCount);
+    Print("║  Trades Blocked (Daily Limit): ", g_dailyTradesBlocked);
+    Print("╚════════════════════════════════════════════════════════════╝");
+}
+
+//+------------------------------------------------------------------+
+//| Timer function - Main loop                                         |
+//+------------------------------------------------------------------+
+void OnTimer()
+{
+    //--- Check for new day reset
+    CheckNewDay();
+    
+    //--- Update equity curve tracking (NEW Task 5)
+    UpdateEquityCurveTracking();
+    
+    //--- Always write features and positions (for monitoring)
+    WriteFeaturesSparse();
+    WriteOpenPositions();
+    
+    //--- Check daily loss limit BEFORE processing any trades
+    if(EnableTrading && CheckDailyLossLimit())
+    {
+        ProcessTradeCommands();
+    }
+    else if(EnableTrading && g_dailyLossLimitHit)
+    {
+        //--- Still need to check for commands to log rejections
+        if(FileIsExist(g_commandsFile))
+        {
+            g_dailyTradesBlocked++;
+            if(g_dailyTradesBlocked <= 5)  // Only log first 5 blocks
+            {
+                Print("[BLOCKED] Trade command ignored - Daily loss limit active");
+            }
+            FileDelete(g_commandsFile);  // Clear commands to prevent buildup
+        }
+    }
+    
+    //--- Manage open positions (BE & Trailing) - always active
+    if(EnableBreakEven || EnableTrailing)
+    {
+        datetime now = TimeCurrent();
+        if(now - g_lastTrailCheck >= TrailCheckSeconds)
+        {
+            ManageOpenPositions();
+            g_lastTrailCheck = now;
+        }
+    }
+}
+
+
+//+------------------------------------------------------------------+
+//| BREAK-EVEN & TRAILING STOP MANAGEMENT                              |
+//+------------------------------------------------------------------+
+void ManageOpenPositions()
+{
+    int total = PositionsTotal();
+    
+    for(int i = 0; i < total; i++)
+    {
+        ulong ticket = PositionGetTicket(i);
+        if(ticket == 0) continue;
+        
+        //--- Only manage our trades
+        long pos_magic = PositionGetInteger(POSITION_MAGIC);
+        if(pos_magic != MagicNumber) continue;
+        
+        string symbol = PositionGetString(POSITION_SYMBOL);
+        ENUM_POSITION_TYPE pos_type = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+        double entry_price = PositionGetDouble(POSITION_PRICE_OPEN);
+        double current_sl = PositionGetDouble(POSITION_SL);
+        double current_tp = PositionGetDouble(POSITION_TP);
+        
+        //--- Get current price
+        double bid = SymbolInfoDouble(symbol, SYMBOL_BID);
+        double ask = SymbolInfoDouble(symbol, SYMBOL_ASK);
+        double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+        int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+        
+        //--- Calculate pip value
+        double pip_factor = (digits == 3 || digits == 5) ? 10.0 : 1.0;
+        double pip_value = point * pip_factor;
+        
+        //--- Calculate initial risk (distance from entry to original SL)
+        double initial_risk = 0;
+        double current_profit_distance = 0;
+        double current_price = 0;
+        
+        if(pos_type == POSITION_TYPE_BUY)
+        {
+            current_price = bid;
+            initial_risk = entry_price - current_sl;
+            current_profit_distance = current_price - entry_price;
+        }
+        else // SELL
+        {
+            current_price = ask;
+            initial_risk = current_sl - entry_price;
+            current_profit_distance = entry_price - current_price;
+        }
+        
+        //--- Skip if we can't determine initial risk
+        if(initial_risk <= 0) continue;
+        
+        //--- Calculate current R:R
+        double current_rr = current_profit_distance / initial_risk;
+        
+        //--- Get current ATR for trailing
+        double atr = GetATRValue(symbol);
+        double trail_distance = atr * Trail_ATR_Multiplier;
+        
+        //--- Calculate BE level with buffer
+        double be_buffer = BE_BufferPips * pip_value;
+        double be_level = 0;
+        
+        if(pos_type == POSITION_TYPE_BUY)
+            be_level = entry_price + be_buffer;
+        else
+            be_level = entry_price - be_buffer;
+        
+        be_level = NormalizeDouble(be_level, digits);
+        
+        //--- Check if already at BE or better
+        bool at_breakeven = false;
+        if(pos_type == POSITION_TYPE_BUY)
+            at_breakeven = (current_sl >= entry_price);
+        else
+            at_breakeven = (current_sl <= entry_price && current_sl > 0);
+        
+        //--- BREAK-EVEN LOGIC
+        if(EnableBreakEven && !at_breakeven && current_rr >= BE_TriggerRR)
+        {
+            bool modified = ModifyPositionSL(ticket, symbol, be_level, current_tp);
+            
+            if(modified)
+            {
+                g_beTriggeredCount++;
+                Print("[BE TRIGGERED] ", symbol, " | R:R=", DoubleToString(current_rr, 2),
+                      " | New SL=", DoubleToString(be_level, digits),
+                      " | Buffer=", BE_BufferPips, " pips");
+            }
+            continue;
+        }
+        
+        //--- TRAILING STOP LOGIC (only after BE)
+        if(EnableTrailing && at_breakeven)
+        {
+            double new_sl = 0;
+            bool should_trail = false;
+            
+            if(pos_type == POSITION_TYPE_BUY)
+            {
+                new_sl = NormalizeDouble(current_price - trail_distance, digits);
+                if(new_sl > current_sl + (5 * point))
+                    should_trail = true;
+            }
+            else
+            {
+                new_sl = NormalizeDouble(current_price + trail_distance, digits);
+                if(new_sl < current_sl - (5 * point) || current_sl == 0)
+                    should_trail = true;
+            }
+            
+            if(should_trail)
+            {
+                bool modified = ModifyPositionSL(ticket, symbol, new_sl, current_tp);
+                
+                if(modified)
+                {
+                    g_trailAdjustedCount++;
+                    if(LogVerbose)
+                    {
+                        Print("[TRAIL ADJUSTED] ", symbol, " | SL: ", 
+                              DoubleToString(current_sl, digits), " -> ",
+                              DoubleToString(new_sl, digits));
+                    }
+                }
+            }
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Modify position stop loss                                          |
+//+------------------------------------------------------------------+
+bool ModifyPositionSL(ulong ticket, string symbol, double new_sl, double current_tp)
+{
+    long stop_level = SymbolInfoInteger(symbol, SYMBOL_TRADE_STOPS_LEVEL);
+    double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+    double min_distance = stop_level * point;
+    
+    double current_price = SymbolInfoDouble(symbol, SYMBOL_BID);
+    
+    if(MathAbs(new_sl - current_price) < min_distance)
+    {
+        if(LogVerbose)
+            Print("[SL MODIFY SKIP] ", symbol, " - Too close to price");
+        return false;
+    }
+    
+    bool result = g_trade.PositionModify(ticket, new_sl, current_tp);
+    
+    if(!result)
+    {
+        Print("[SL MODIFY FAILED] ", symbol, " | Error: ", GetLastError());
+    }
+    
+    return result;
+}
+
+
+//+------------------------------------------------------------------+
+//| Write current open positions to CSV                                |
+//+------------------------------------------------------------------+
+void WriteOpenPositions()
+{
+    int handle = FileOpen(g_positionsFile, FILE_WRITE|FILE_CSV|FILE_ANSI, ',');
+    if(handle == INVALID_HANDLE) return;
+    
+    FileWrite(handle, "symbol", "ticket", "direction", "volume", "entry_price", 
+              "sl", "tp", "profit", "magic", "open_time", "be_status", "trail_active");
+    
+    int total = PositionsTotal();
+    int our_positions = 0;
+    
+    for(int i = 0; i < total; i++)
+    {
+        ulong ticket = PositionGetTicket(i);
+        if(ticket == 0) continue;
+        
+        long pos_magic = PositionGetInteger(POSITION_MAGIC);
+        if(pos_magic != MagicNumber) continue;
+        
+        string symbol = PositionGetString(POSITION_SYMBOL);
+        ENUM_POSITION_TYPE type = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+        double volume = PositionGetDouble(POSITION_VOLUME);
+        double entry = PositionGetDouble(POSITION_PRICE_OPEN);
+        double sl = PositionGetDouble(POSITION_SL);
+        double tp = PositionGetDouble(POSITION_TP);
+        double profit = PositionGetDouble(POSITION_PROFIT);
+        datetime open_time = (datetime)PositionGetInteger(POSITION_TIME);
+        
+        string direction = (type == POSITION_TYPE_BUY) ? "BUY" : "SELL";
+        
+        bool at_be = false;
+        if(type == POSITION_TYPE_BUY)
+            at_be = (sl >= entry);
+        else
+            at_be = (sl <= entry && sl > 0);
+        
+        string be_status = at_be ? "YES" : "NO";
+        string trail_active = (at_be && EnableTrailing) ? "YES" : "NO";
+        
+        FileWrite(handle, symbol, ticket, direction, volume, entry, sl, tp, 
+                  profit, pos_magic, TimeToString(open_time, TIME_DATE|TIME_MINUTES),
+                  be_status, trail_active);
+        
+        our_positions++;
+    }
+    
+    FileClose(handle);
+}
+
+//+------------------------------------------------------------------+
+//| Initialize trade execution log                                     |
+//+------------------------------------------------------------------+
+void InitializeTradeLog()
+{
+    if(g_logHeaderWritten) return;
+    
+    int handle = FileOpen(g_tradesLogFile, FILE_WRITE|FILE_CSV|FILE_ANSI, ',');
+    if(handle == INVALID_HANDLE) return;
+    
+    string header = "timestamp,symbol,action,lot_size,confidence,entry_price,sl_price,tp_price,";
+    header += "ticket,result,error_code,spread_pips,atr_value,daily_pnl_pct,comment";
+    
+    FileWrite(handle, header);
+    FileClose(handle);
+    g_logHeaderWritten = true;
+}
+
+//+------------------------------------------------------------------+
+//| Get count of our open positions                                    |
+//+------------------------------------------------------------------+
+int GetOurPositionCount()
+{
+    int count = 0;
+    int total = PositionsTotal();
+    
+    for(int i = 0; i < total; i++)
+    {
+        ulong ticket = PositionGetTicket(i);
+        if(ticket == 0) continue;
+        
+        if(PositionGetInteger(POSITION_MAGIC) == MagicNumber)
+            count++;
+    }
+    
+    return count;
+}
+
+//+------------------------------------------------------------------+
+//| Process trade commands from Python system                         |
+//+------------------------------------------------------------------+
+void ProcessTradeCommands()
+{
+    if(!FileIsExist(g_commandsFile)) return;
+    
+    int handle = FileOpen(g_commandsFile, FILE_READ|FILE_CSV|FILE_ANSI, ',');
+    if(handle == INVALID_HANDLE) return;
+    
+    //--- Skip header (6 columns: symbol, action, confidence, sl_price, tp_price, timestamp)
+    FileReadString(handle); FileReadString(handle);
+    FileReadString(handle); FileReadString(handle);
+    FileReadString(handle); FileReadString(handle);
+    
+    int commands_processed = 0;
+    int commands_skipped = 0;
+    
+    while(!FileIsEnding(handle))
+    {
+        string symbol = FileReadString(handle);
+        string action = FileReadString(handle);
+        double confidence = StringToDouble(FileReadString(handle));
+        double sl_price = StringToDouble(FileReadString(handle));
+        double tp_price = StringToDouble(FileReadString(handle));
+        string timestamp_str = FileReadString(handle);
+        
+        if(symbol == "" || action == "") continue;
+        
+        if(LogVerbose)
+            Print("READ: ", symbol, " | ", action, " | ", confidence, 
+                  " | SL:", sl_price, " | TP:", tp_price,
+                  " | ", GetDailyPnLStatus(), " | ", GetPortfolioRiskStatus());
+        
+        bool success = false;
+        
+        if(action == "BUY" || action == "SELL")
+            success = ExecuteTrade(symbol, action, confidence, sl_price, tp_price);
+        else if(action == "SCALE_OUT")
+            success = ExecuteScaleOut(symbol, confidence);
+        
+        if(success) commands_processed++;
+        else commands_skipped++;
+    }
+    
+    FileClose(handle);
+    
+    if(commands_processed > 0 || commands_skipped > 0)
+        Print("Commands: ", commands_processed, " executed, ", commands_skipped, " rejected");
+    
+    if(commands_processed > 0)
+        FileDelete(g_commandsFile);
+}
+
+
+//+------------------------------------------------------------------+
+//| Execute SCALE_OUT - Partial close                                  |
+//+------------------------------------------------------------------+
+bool ExecuteScaleOut(string symbol, double confidence)
+{
+    if(!PositionSelect(symbol))
+    {
+        LogTrade(symbol, "SCALE_OUT", 0, confidence, 0, 0, 0, 0, "REJECTED", 0, "NO_POSITION");
+        return false;
+    }
+    
+    double pos_volume = PositionGetDouble(POSITION_VOLUME);
+    ENUM_POSITION_TYPE pos_type = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+    ulong pos_ticket = PositionGetInteger(POSITION_TICKET);
+    
+    double scale_volume = 0.01;
+    if(pos_volume < scale_volume)
+    {
+        LogTrade(symbol, "SCALE_OUT", 0, confidence, 0, 0, 0, 0, "REJECTED", 0, "VOLUME_TOO_SMALL");
+        return false;
+    }
+    
+    MqlTradeRequest request = {};
+    MqlTradeResult result = {};
+    
+    request.action = TRADE_ACTION_DEAL;
+    request.symbol = symbol;
+    request.volume = scale_volume;
+    request.position = pos_ticket;
+    request.deviation = Slippage;
+    request.magic = MagicNumber;
+    request.comment = "SCALE_OUT";
+    request.type_filling = ORDER_FILLING_FOK;
+    
+    if(pos_type == POSITION_TYPE_BUY)
+    {
+        request.type = ORDER_TYPE_SELL;
+        request.price = SymbolInfoDouble(symbol, SYMBOL_BID);
+    }
+    else
+    {
+        request.type = ORDER_TYPE_BUY;
+        request.price = SymbolInfoDouble(symbol, SYMBOL_ASK);
+    }
+    
+    bool success = OrderSend(request, result);
+    
+    LogTrade(symbol, "SCALE_OUT", scale_volume, confidence, request.price, 0, 0, 
+             result.order, success ? "SUCCESS" : "FAILED", result.retcode, "PARTIAL_CLOSE");
+    
+    if(success)
+        Print("[SCALE_OUT SUCCESS] ", symbol, " closed ", scale_volume, " lots");
+    
+    return success;
+}
+
+//+------------------------------------------------------------------+
+//| Execute a trade (BUY/SELL) with risk checks                        |
+//+------------------------------------------------------------------+
+bool ExecuteTrade(string symbol, string action, double confidence, double sl_price_in = 0, double tp_price_in = 0)
+{
+    //--- Check confidence threshold
+    if(confidence < MinConfidence)
+    {
+        Print("[REJECTED] ", symbol, " - Confidence ", confidence, " < ", MinConfidence);
+        LogTrade(symbol, action, 0, confidence, 0, 0, 0, 0, "REJECTED", 0, "LOW_CONFIDENCE");
+        return false;
+    }
+    
+    //--- CHECK MAX TOTAL POSITIONS (NEW in v2.27)
+    int current_positions = GetOurPositionCount();
+    if(current_positions >= MaxTotalPositions)
+    {
+        Print("[REJECTED] ", symbol, " - Max positions reached: ", current_positions, "/", MaxTotalPositions);
+        LogTrade(symbol, action, 0, confidence, 0, 0, 0, 0, "REJECTED", 0, "MAX_POSITIONS");
+        return false;
+    }
+    
+    //--- CHECK PORTFOLIO RISK LIMIT (NEW - Task 2)
+    double new_trade_risk = 0;
+    if(!CheckPortfolioRiskLimit(symbol, action, FixedLotSize, new_trade_risk))
+    {
+        Print("[REJECTED] ", symbol, " - Portfolio risk limit exceeded");
+        LogTrade(symbol, action, 0, confidence, 0, 0, 0, 0, "REJECTED", 0, "PORTFOLIO_RISK_LIMIT");
+        return false;
+    }
+    
+    //--- CHECK CORRELATION EXPOSURE (NEW - Task 3)
+    if(!CheckCorrelationExposure(symbol))
+    {
+        Print("[REJECTED] ", symbol, " - Correlation exposure limit exceeded");
+        LogTrade(symbol, action, 0, confidence, 0, 0, 0, 0, "REJECTED", 0, "CORRELATION_LIMIT");
+        return false;
+    }
+    
+    //--- CHECK EQUITY CURVE - PAUSE if in drawdown (Task 5)
+    if(!CheckEquityCurveAllowsTrading())
+    {
+        Print("[REJECTED] ", symbol, " - Equity curve drawdown - trading paused");
+        LogTrade(symbol, action, 0, confidence, 0, 0, 0, 0, "REJECTED", 0, "EQUITY_DRAWDOWN_PAUSE");
+        return false;
+    }
+    
+    //--- CHECK VOLATILITY REGIME (NEW - Task 6)
+    double vol_atr_pips = 0;
+    string vol_regime = "";
+    if(!CheckVolatilityRegime(symbol, vol_atr_pips, vol_regime))
+    {
+        Print("[REJECTED] ", symbol, " - Volatility regime: ", vol_regime, " (ATR=", 
+              DoubleToString(vol_atr_pips, 1), " pips)");
+        LogTrade(symbol, action, 0, confidence, 0, 0, 0, 0, "REJECTED", 0, 
+                 StringFormat("VOL_%s_%.0f", vol_regime, vol_atr_pips));
+        return false;
+    }
+
+    //--- Validate symbol
+    if(!SymbolInfoInteger(symbol, SYMBOL_SELECT))
+    {
+        if(!SymbolSelect(symbol, true))
+        {
+            LogTrade(symbol, action, 0, confidence, 0, 0, 0, 0, "FAILED", 0, "INVALID_SYMBOL");
+            return false;
+        }
+        Sleep(100);
+    }
+    
+    //--- Check spread
+    double spread_pips = GetSpreadInPips(symbol);
+    if(spread_pips > MaxSpreadPips)
+    {
+        Print("[REJECTED] ", symbol, " - Spread ", spread_pips, " > ", MaxSpreadPips);
+        LogTrade(symbol, action, 0, confidence, 0, 0, 0, 0, "REJECTED", 0, "HIGH_SPREAD");
+        return false;
+    }
+    
+    //--- FIXED LOT SIZE - Always 0.01 (no scaling based on confidence)
+    double lot_size = FixedLotSize;
+    
+    double lot_min = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
+    double lot_max = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
+    double lot_step = SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP);
+    
+    lot_size = MathMax(lot_size, lot_min);
+    lot_size = MathMin(lot_size, lot_max);
+    lot_size = NormalizeDouble(MathRound(lot_size / lot_step) * lot_step, 2);
+    
+    Print("[EXECUTING] ", symbol, " ", action, " ", lot_size, " lots (FIXED) | Conf: ", confidence);
+    
+    double entry_price = 0;
+    ENUM_ORDER_TYPE order_type;
+    
+    if(action == "BUY")
+    {
+        entry_price = SymbolInfoDouble(symbol, SYMBOL_ASK);
+        order_type = ORDER_TYPE_BUY;
+    }
+    else
+    {
+        entry_price = SymbolInfoDouble(symbol, SYMBOL_BID);
+        order_type = ORDER_TYPE_SELL;
+    }
+    
+    //--- LEVEL-BASED SL/TP or ATR FALLBACK
+    double sl_price = 0;
+    double tp_price = 0;
+    string sl_tp_mode = "ATR";
+    
+    if(sl_price_in > 0 && tp_price_in > 0)
+    {
+        //--- Use level-based SL/TP from Python
+        sl_price = sl_price_in;
+        tp_price = tp_price_in;
+        sl_tp_mode = "LEVEL";
+        Print("[SL/TP] Using level-based: SL=", sl_price, " TP=", tp_price);
+    }
+    else
+    {
+        //--- Fallback to ATR-based SL/TP
+        double atr = GetATRValue(symbol);
+        double sl_distance = atr * SL_ATR_Multiplier;
+        double tp_distance = sl_distance * RiskRewardRatio;
+        
+        if(action == "BUY")
+        {
+            sl_price = entry_price - sl_distance;
+            tp_price = entry_price + tp_distance;
+        }
+        else
+        {
+            sl_price = entry_price + sl_distance;
+            tp_price = entry_price - tp_distance;
+        }
+        Print("[SL/TP] Using ATR-based: SL=", sl_price, " TP=", tp_price);
+    }
+    
+    int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+    sl_price = NormalizeDouble(sl_price, digits);
+    tp_price = NormalizeDouble(tp_price, digits);
+    
+    MqlTradeRequest request = {};
+    MqlTradeResult result = {};
+    
+    request.action = TRADE_ACTION_DEAL;
+    request.symbol = symbol;
+    request.volume = lot_size;
+    request.type = order_type;
+    request.price = entry_price;
+    request.sl = sl_price;
+    request.tp = tp_price;
+    request.deviation = Slippage;
+    request.magic = MagicNumber;
+    request.comment = StringFormat("AI_%.0f%%_%s_v2.27", confidence * 100, sl_tp_mode);
+    request.type_filling = ORDER_FILLING_FOK;
+    
+    bool success = OrderSend(request, result);
+    
+    LogTrade(symbol, action, lot_size, confidence, entry_price, sl_price, tp_price, 
+             result.order, success ? "SUCCESS" : "FAILED", result.retcode, 
+             StringFormat("Pos:%d/%d", current_positions + 1, MaxTotalPositions));
+    
+    if(success)
+        Print("[SUCCESS] ", symbol, " ", action, " ", lot_size, " @ ", entry_price, 
+              " | Positions: ", current_positions + 1, "/", MaxTotalPositions);
+    else
+        Print("[FAILED] ", symbol, " | Error: ", result.retcode);
+    
+    return success;
+}
+
+
+//+------------------------------------------------------------------+
+//| Helper Functions                                                   |
+//+------------------------------------------------------------------+
+double GetATRValue(string symbol)
+{
+    int idx = -1;
+    for(int i = 0; i < ArraySize(g_pairs); i++)
+    {
+        if(g_pairs[i] == symbol) { idx = i; break; }
+    }
+    
+    if(idx < 0) return 0.0001;
+    
+    double atr[];
+    if(CopyBuffer(g_atr_handles[idx], 0, 0, 1, atr) > 0)
+        return atr[0];
+    
+    return 0.0001;
+}
+
+double GetSpreadInPips(string symbol)
+{
+    double ask = SymbolInfoDouble(symbol, SYMBOL_ASK);
+    double bid = SymbolInfoDouble(symbol, SYMBOL_BID);
+    double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+    int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+    
+    if(point <= 0) point = 0.00001;
+    double pip_factor = (digits == 3 || digits == 5) ? 10.0 : 1.0;
+    
+    return (ask - bid) / point / pip_factor;
+}
+
+void LogTrade(string symbol, string action, double lot_size, double confidence,
+              double entry_price, double sl_price, double tp_price,
+              ulong ticket, string result, uint error_code, string comment)
+{
+    int handle = FileOpen(g_tradesLogFile, FILE_READ|FILE_WRITE|FILE_CSV|FILE_ANSI, ',');
+    if(handle == INVALID_HANDLE) return;
+    
+    FileSeek(handle, 0, SEEK_END);
+    
+    string timestamp = TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES|TIME_SECONDS);
+    double spread_pips = GetSpreadInPips(symbol);
+    double atr_value = GetATRValue(symbol);
+    
+    //--- Calculate daily P&L percent for logging
+    double daily_pnl_pct = 0;
+    if(g_dayStartEquity > 0)
+        daily_pnl_pct = ((AccountInfoDouble(ACCOUNT_EQUITY) - g_dayStartEquity) / g_dayStartEquity) * 100;
+    
+    string log_entry = StringFormat("%s,%s,%s,%.2f,%.2f,%.5f,%.5f,%.5f,%d,%s,%d,%.2f,%.5f,%.2f,%s",
+        timestamp, symbol, action, lot_size, confidence, entry_price, sl_price, tp_price,
+        ticket, result, error_code, spread_pips, atr_value, daily_pnl_pct, comment);
+    
+    FileWrite(handle, log_entry);
+    FileClose(handle);
+}
+
+double CalculateVolumeSMA(string symbol, int period)
+{
+    double sum = 0;
+    for(int i = 0; i < period; i++)
+        sum += (double)iVolume(symbol, PERIOD_CURRENT, i);
+    return sum / period;
+}
+
+double CalculateVolatility(string symbol, int period)
+{
+    double sum = 0;
+    for(int i = 0; i < period; i++)
+    {
+        double high = iHigh(symbol, PERIOD_CURRENT, i);
+        double low = iLow(symbol, PERIOD_CURRENT, i);
+        sum += (high - low);
+    }
+    return sum / period;
+}
+
+double CalculateATRAverage(string symbol, int period)
+{
+    double sum = 0;
+    for(int i = 0; i < period; i++)
+    {
+        double high = iHigh(symbol, PERIOD_CURRENT, i);
+        double low = iLow(symbol, PERIOD_CURRENT, i);
+        double close_prev = iClose(symbol, PERIOD_CURRENT, i+1);
+        double tr = MathMax(high - low, MathMax(MathAbs(high - close_prev), MathAbs(low - close_prev)));
+        sum += tr;
+    }
+    return sum / period;
+}
+
+double CalculateReturnsStd(string symbol, int period)
+{
+    double returns[];
+    ArrayResize(returns, period);
+    
+    for(int i = 0; i < period; i++)
+    {
+        double close_cur = iClose(symbol, PERIOD_CURRENT, i);
+        double close_prev = iClose(symbol, PERIOD_CURRENT, i+1);
+        returns[i] = (close_prev > 0) ? (close_cur - close_prev) / close_prev : 0;
+    }
+    
+    double mean = 0;
+    for(int i = 0; i < period; i++) mean += returns[i];
+    mean /= period;
+    
+    double variance = 0;
+    for(int i = 0; i < period; i++)
+        variance += MathPow(returns[i] - mean, 2);
+    
+    return MathSqrt(variance / period);
+}
+
+double CalculateSharpeApprox(string symbol, int period)
+{
+    double returns[];
+    ArrayResize(returns, period);
+    
+    for(int i = 0; i < period; i++)
+    {
+        double close_cur = iClose(symbol, PERIOD_CURRENT, i);
+        double close_prev = iClose(symbol, PERIOD_CURRENT, i+1);
+        returns[i] = (close_prev > 0) ? (close_cur - close_prev) / close_prev : 0;
+    }
+    
+    double mean = 0;
+    for(int i = 0; i < period; i++) mean += returns[i];
+    mean /= period;
+    
+    double std = CalculateReturnsStd(symbol, period);
+    return (std > 0) ? mean / std : 0;
+}
+
+double CalculateMaxDrawdown(string symbol, int period)
+{
+    double max_price = iClose(symbol, PERIOD_CURRENT, 0);
+    double max_dd = 0;
+    
+    for(int i = 0; i < period; i++)
+    {
+        double close = iClose(symbol, PERIOD_CURRENT, i);
+        if(close > max_price) max_price = close;
+        double dd = (max_price > 0) ? (close - max_price) / max_price : 0;
+        if(dd < max_dd) max_dd = dd;
+    }
+    return max_dd;
+}
+
+double CalculateCorrelation(string symbol1, string symbol2, int period)
+{
+    double closes1[], closes2[];
+    ArrayResize(closes1, period);
+    ArrayResize(closes2, period);
+    
+    for(int i = 0; i < period; i++)
+    {
+        closes1[i] = iClose(symbol1, PERIOD_CURRENT, i);
+        closes2[i] = iClose(symbol2, PERIOD_CURRENT, i);
+    }
+    
+    double mean1 = 0, mean2 = 0;
+    for(int i = 0; i < period; i++) { mean1 += closes1[i]; mean2 += closes2[i]; }
+    mean1 /= period; mean2 /= period;
+    
+    double cov = 0, var1 = 0, var2 = 0;
+    for(int i = 0; i < period; i++)
+    {
+        double diff1 = closes1[i] - mean1;
+        double diff2 = closes2[i] - mean2;
+        cov += diff1 * diff2;
+        var1 += diff1 * diff1;
+        var2 += diff2 * diff2;
+    }
+    
+    double denom = MathSqrt(var1 * var2);
+    return (denom > 0) ? cov / denom : 0;
+}
+
+void CalculateCurrencyStrengths(double &close_prices[], double &strengths[])
+{
+    for(int i = 0; i < 8; i++)
+        strengths[i] = 50.0 + (MathRand() % 1000) / 20.0;
+}
+
+
+//+------------------------------------------------------------------+
+//| Write features in SPARSE format - 58 features                      |
+//+------------------------------------------------------------------+
+void WriteFeaturesSparse()
+{
+    int handle = FileOpen(g_featuresFile, FILE_WRITE|FILE_CSV|FILE_ANSI, ',');
+    if(handle == INVALID_HANDLE) return;
+    
+    string header = "timestamp,symbol,close,high,low,volume,sma_20,sma_50,fast_ema,slow_ema,rsi,atr,";
+    header += "bb_upper,bb_middle,bb_lower,stoch_k,stoch_d,volume_sma,volume_ratio,price_volume,";
+    header += "volatility,momentum,trend_confirm,momentum_confirm,volatility_confirm,";
+    header += "returns_std,sharpe_approx,max_drawdown,";
+    header += "htf_fast_ema,htf_slow_ema,htf_trend_direction,htf_trend_alignment,";
+    header += "bullish_sentiment,bearish_sentiment,net_sentiment,";
+    header += "corr_eurusd.sim,corr_gbpusd.sim,corr_usdjpy.sim,corr_usdchf.sim,";
+    header += "corr_audusd.sim,corr_usdcad.sim,corr_nzdusd.sim,corr_eurgbp.sim,avg_correlation,";
+    header += "usd_strength,eur_strength,gbp_strength,jpy_strength,chf_strength,cad_strength,aud_strength,nzd_strength,";
+    header += "htf_confirm,price_action_confirm,correlation_confirm,ema_confirm,rsi_confirm,volume_confirm,bb_confirm,stoch_confirm";
+    
+    FileWrite(handle, header);
+    
+    string timestamp = TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES|TIME_SECONDS);
+    
+    double close_prices[8];
+    for(int i = 0; i < 8; i++)
+        close_prices[i] = iClose(g_pairs[i], PERIOD_CURRENT, 0);
+    
+    int rows_written = 0;
+    for(int i = 0; i < ArraySize(g_pairs); i++)
+    {
+        string pair = g_pairs[i];
+        
+        double close = iClose(pair, PERIOD_CURRENT, 0);
+        double high = iHigh(pair, PERIOD_CURRENT, 0);
+        double low = iLow(pair, PERIOD_CURRENT, 0);
+        long volume = iVolume(pair, PERIOD_CURRENT, 0);
+        
+        if(close == 0 || high == 0 || low == 0) continue;
+        
+        double fastEMA[], slowEMA[], rsi[], atr[];
+        double bb_upper[], bb_middle[], bb_lower[];
+        double stoch_k[], stoch_d[], sma20[], sma50[];
+        double htfFastEMA[], htfSlowEMA[];
+        
+        if(CopyBuffer(g_fastEMA_handles[i], 0, 0, 1, fastEMA) <= 0) continue;
+        if(CopyBuffer(g_slowEMA_handles[i], 0, 0, 1, slowEMA) <= 0) continue;
+        if(CopyBuffer(g_rsi_handles[i], 0, 0, 1, rsi) <= 0) continue;
+        if(CopyBuffer(g_atr_handles[i], 0, 0, 1, atr) <= 0) continue;
+        if(CopyBuffer(g_bb_handles[i], 1, 0, 1, bb_upper) <= 0) continue;
+        if(CopyBuffer(g_bb_handles[i], 0, 0, 1, bb_middle) <= 0) continue;
+        if(CopyBuffer(g_bb_handles[i], 2, 0, 1, bb_lower) <= 0) continue;
+        if(CopyBuffer(g_stoch_handles[i], 0, 0, 1, stoch_k) <= 0) continue;
+        if(CopyBuffer(g_stoch_handles[i], 1, 0, 1, stoch_d) <= 0) continue;
+        if(CopyBuffer(g_sma20_handles[i], 0, 0, 1, sma20) <= 0) continue;
+        if(CopyBuffer(g_sma50_handles[i], 0, 0, 1, sma50) <= 0) continue;
+        if(CopyBuffer(g_htfFastEMA_handles[i], 0, 0, 1, htfFastEMA) <= 0) continue;
+        if(CopyBuffer(g_htfSlowEMA_handles[i], 0, 0, 1, htfSlowEMA) <= 0) continue;
+        
+        double volume_sma = CalculateVolumeSMA(pair, 20);
+        double volume_ratio = (volume_sma > 0) ? (double)volume / volume_sma : 1.0;
+        double price_volume = close * volume;
+        
+        double close_20 = iClose(pair, PERIOD_CURRENT, 20);
+        double momentum = close - close_20;
+        double volatility = CalculateVolatility(pair, 20);
+        
+        double trend_confirm = (fastEMA[0] > slowEMA[0]) ? 1.0 : 0.0;
+        double momentum_confirm = (momentum > 0) ? 1.0 : 0.0;
+        
+        double atr_avg = CalculateATRAverage(pair, 20);
+        double volatility_confirm = (atr[0] > atr_avg) ? 1.0 : 0.0;
+        
+        double returns_std = CalculateReturnsStd(pair, 20);
+        double sharpe_approx = CalculateSharpeApprox(pair, 20);
+        double max_drawdown = CalculateMaxDrawdown(pair, 50);
+        
+        double htf_trend_dir = (htfFastEMA[0] > htfSlowEMA[0]) ? 1.0 : -1.0;
+        double htf_trend_align = ((fastEMA[0] > slowEMA[0]) == (htfFastEMA[0] > htfSlowEMA[0])) ? 1.0 : 0.0;
+        
+        double bullish_sent = (close > bb_middle[0] && rsi[0] > 50) ? 1.0 : 0.0;
+        double bearish_sent = (close < bb_middle[0] && rsi[0] < 50) ? 1.0 : 0.0;
+        double net_sent = bullish_sent - bearish_sent;
+        
+        double correlations[8];
+        double avg_corr = 0;
+        for(int j = 0; j < 8; j++)
+        {
+            correlations[j] = (j == i) ? 1.0 : CalculateCorrelation(pair, g_pairs[j], 20);
+            avg_corr += correlations[j];
+        }
+        avg_corr /= 8.0;
+        
+        double strengths[8];
+        CalculateCurrencyStrengths(close_prices, strengths);
+        
+        double htf_confirm = (htf_trend_dir > 0) ? 1.0 : 0.0;
+        double price_action_confirm = (close > bb_middle[0]) ? 1.0 : 0.0;
+        double correlation_confirm = (avg_corr > 0.5) ? 1.0 : 0.0;
+        double ema_confirm = (fastEMA[0] > slowEMA[0]) ? 1.0 : 0.0;
+        double rsi_confirm = (rsi[0] > 50) ? 1.0 : 0.0;
+        double volume_confirm_val = (volume > volume_sma) ? 1.0 : 0.0;
+        double bb_confirm = (close > bb_middle[0]) ? 1.0 : 0.0;
+        double stoch_confirm = (stoch_k[0] > stoch_d[0]) ? 1.0 : 0.0;
+
+        string row = StringFormat("%s,%s,%.5f,%.5f,%.5f,%d,%.5f,%.5f,%.5f,%.5f,%.2f,%.5f,",
+            timestamp, pair, close, high, low, volume, sma20[0], sma50[0],
+            fastEMA[0], slowEMA[0], rsi[0], atr[0]);
+        
+        row += StringFormat("%.5f,%.5f,%.5f,%.2f,%.2f,%.2f,%.4f,%.2f,",
+            bb_upper[0], bb_middle[0], bb_lower[0], stoch_k[0], stoch_d[0],
+            volume_sma, volume_ratio, price_volume);
+        
+        row += StringFormat("%.5f,%.5f,%.2f,%.2f,%.2f,%.5f,%.4f,%.5f,",
+            volatility, momentum, trend_confirm, momentum_confirm, volatility_confirm,
+            returns_std, sharpe_approx, max_drawdown);
+        
+        row += StringFormat("%.5f,%.5f,%.2f,%.2f,", htfFastEMA[0], htfSlowEMA[0], htf_trend_dir, htf_trend_align);
+        row += StringFormat("%.2f,%.2f,%.2f,", bullish_sent, bearish_sent, net_sent);
+        
+        for(int j = 0; j < 8; j++) row += StringFormat("%.4f,", correlations[j]);
+        row += StringFormat("%.4f,", avg_corr);
+        
+        for(int j = 0; j < 8; j++) row += StringFormat("%.2f,", strengths[j]);
+        
+        row += StringFormat("%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f",
+            htf_confirm, price_action_confirm, correlation_confirm,
+            ema_confirm, rsi_confirm, volume_confirm_val, bb_confirm, stoch_confirm);
+        
+        FileWrite(handle, row);
+        rows_written++;
+    }
+    
+    FileClose(handle);
+}
+//+------------------------------------------------------------------+
