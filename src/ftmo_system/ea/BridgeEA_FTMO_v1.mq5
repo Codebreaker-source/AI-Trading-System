@@ -334,33 +334,66 @@ void WriteFeatureCSV(int idx)
 //+------------------------------------------------------------------+
 //| Read signal file for a symbol                                     |
 //+------------------------------------------------------------------+
-string ReadSignal(string sym, double &out_conf, double &out_sl, double &out_tp, double &out_lot)
+// Read a single source-tagged signal file
+// Format: symbol,action,confidence,sl,tp,lot,trade_id,timestamp
+string ReadSignalFile(string sig_path, double &out_conf, double &out_sl,
+                      double &out_tp, double &out_lot, string &out_trade_id)
 {
-    out_conf = 0; out_sl = 0; out_tp = 0; out_lot = FixedLotSize;
-
-    string sig_path = "signal_" + sym + ".txt";
-    if(!FileIsExist(sig_path, FILE_COMMON)) return "HOLD";
+    out_conf = 0; out_sl = 0; out_tp = 0; out_lot = FixedLotSize; out_trade_id = "";
 
     int fh = FileOpen(sig_path, FILE_READ | FILE_CSV | FILE_COMMON | FILE_ANSI, ',');
     if(fh == INVALID_HANDLE) return "HOLD";
 
-    // Format (no header): symbol,action,confidence,sl_price,tp_price,lot_size,timestamp
     string action = "HOLD";
     if(!FileIsEnding(fh))
     {
-        FileReadString(fh);           // symbol (discard)
-        action    = FileReadString(fh);
-        out_conf  = StringToDouble(FileReadString(fh));
-        out_sl    = StringToDouble(FileReadString(fh));
-        out_tp    = StringToDouble(FileReadString(fh));
-        out_lot   = StringToDouble(FileReadString(fh));
-        if(out_lot < FixedLotSize || out_lot == 0) out_lot = FixedLotSize;
+        FileReadString(fh);               // symbol (discard)
+        action       = FileReadString(fh);
+        out_conf     = StringToDouble(FileReadString(fh));
+        out_sl       = StringToDouble(FileReadString(fh));
+        out_tp       = StringToDouble(FileReadString(fh));
+        out_lot      = StringToDouble(FileReadString(fh));
+        out_trade_id = FileReadString(fh); // trade_id
+        if(out_lot < 0.01 || out_lot == 0) out_lot = FixedLotSize;
     }
     FileClose(fh);
-
-    // Delete signal after reading to prevent re-acting on stale signal
     FileDelete(sig_path, FILE_COMMON);
     return action;
+}
+
+// Scan Common\Files for all signal_{sym}_*.txt files and execute each
+void ReadAndExecuteAllSignals(string sym)
+{
+    // List all files matching signal_{sym}_*.txt
+    string search = "signal_" + sym + "_";
+    long   fh_search = FileFindFirst(search + "*.txt", sym, FILE_COMMON);
+    if(fh_search == INVALID_HANDLE) return;
+
+    string fname;
+    do
+    {
+        fname = "";
+        if(!FileFindNext(fh_search, fname)) break;
+        if(StringLen(fname) == 0) break;
+
+        if(!FileIsExist(fname, FILE_COMMON)) continue;
+
+        double conf=0, sl=0, tp=0, lot=FixedLotSize;
+        string trade_id="";
+        string action = ReadSignalFile(fname, conf, sl, tp, lot, trade_id);
+
+        if((action=="BUY" || action=="SELL") && conf >= MinConfidence)
+        {
+            // Extract source name from filename: signal_{sym}_{source}.txt
+            string source = fname;
+            StringReplace(source, "signal_" + sym + "_", "");
+            StringReplace(source, ".txt", "");
+            ExecuteTradeWithId(sym, action, conf, sl, tp, lot, trade_id, source);
+        }
+    }
+    while(true);
+
+    FileFindClose(fh_search);
 }
 
 //+------------------------------------------------------------------+
@@ -404,7 +437,8 @@ void WriteOpenPositions()
 //+------------------------------------------------------------------+
 void LogExecution(string sym, string action, string outcome,
                   double entry, double exit_price, double sl, double tp,
-                  double volume, double profit, ulong ticket)
+                  double volume, double profit, ulong ticket,
+                  string trade_id="", string signal_source="")
 {
     bool need_header = !FileIsExist("trades.csv", FILE_COMMON);
     int fh = FileOpen("trades.csv", FILE_READ|FILE_WRITE|FILE_CSV|FILE_COMMON|FILE_ANSI, ',');
@@ -414,7 +448,7 @@ void LogExecution(string sym, string action, string outcome,
     if(need_header)
         FileWrite(fh, "timestamp","symbol","direction","outcome",
                       "entry_price","exit_price","sl","tp",
-                      "volume","profit","ticket");
+                      "volume","profit","ticket","trade_id","signal_source");
 
     FileWrite(fh,
         TimeToString(TimeCurrent(),TIME_DATE|TIME_MINUTES|TIME_SECONDS),
@@ -422,8 +456,53 @@ void LogExecution(string sym, string action, string outcome,
         DoubleToString(entry,8), DoubleToString(exit_price,8),
         DoubleToString(sl,8), DoubleToString(tp,8),
         DoubleToString(volume,2), DoubleToString(profit,2),
-        IntegerToString((long)ticket));
+        IntegerToString((long)ticket),
+        trade_id, signal_source);
     FileClose(fh);
+}
+
+// Execute trade with full attribution (trade_id + source)
+void ExecuteTradeWithId(string sym, string action, double confidence,
+                        double sl_price, double tp_price, double lot,
+                        string trade_id, string source)
+{
+    if(!EnableTrading) return;
+    if(CheckFTMOLimits()) return;
+
+    double spread_pips = (SymbolInfoDouble(sym,SYMBOL_ASK)-SymbolInfoDouble(sym,SYMBOL_BID))/GetPipValue(sym);
+    if(spread_pips > MaxSpreadPips) return;
+
+    double atr   = GetATRForSymbol(sym);
+    double entry = 0;
+
+    if(action == "BUY")
+    {
+        entry = SymbolInfoDouble(sym, SYMBOL_ASK);
+        if(sl_price<=0) sl_price = entry - atr*SL_ATR_Multiplier;
+        if(tp_price<=0) tp_price = entry + atr*SL_ATR_Multiplier*RiskRewardRatio;
+        if(g_trade.Buy(lot,sym,entry,sl_price,tp_price,"FTMO_AI_" + source))
+        {
+            ulong ticket = g_trade.ResultOrder();
+            Print("[BUY] ",sym," src=",source," lot=",DoubleToString(lot,2),
+                  " entry=",DoubleToString(entry,5)," id=",trade_id);
+            LogExecution(sym,"BUY","OPEN",entry,0,sl_price,tp_price,lot,0,ticket,trade_id,source);
+        }
+        else Print("[ERROR] Buy failed (",source,"): ",g_trade.ResultRetcodeDescription());
+    }
+    else if(action == "SELL")
+    {
+        entry = SymbolInfoDouble(sym, SYMBOL_BID);
+        if(sl_price<=0) sl_price = entry + atr*SL_ATR_Multiplier;
+        if(tp_price<=0) tp_price = entry - atr*SL_ATR_Multiplier*RiskRewardRatio;
+        if(g_trade.Sell(lot,sym,entry,sl_price,tp_price,"FTMO_AI_" + source))
+        {
+            ulong ticket = g_trade.ResultOrder();
+            Print("[SELL] ",sym," src=",source," lot=",DoubleToString(lot,2),
+                  " entry=",DoubleToString(entry,5)," id=",trade_id);
+            LogExecution(sym,"SELL","OPEN",entry,0,sl_price,tp_price,lot,0,ticket,trade_id,source);
+        }
+        else Print("[ERROR] Sell failed (",source,"): ",g_trade.ResultRetcodeDescription());
+    }
 }
 
 //+------------------------------------------------------------------+
@@ -730,6 +809,12 @@ void UpdateStreakTracking()
         string direction   = (deal_type==DEAL_TYPE_BUY) ? "BUY" : "SELL";
         ulong  pos_id      = (ulong)HistoryDealGetInteger(deal,DEAL_POSITION_ID);
 
+        // Extract source from deal comment (format: "FTMO_AI_{source}")
+        string deal_comment = HistoryDealGetString(deal, DEAL_COMMENT);
+        string deal_source  = "";
+        if(StringFind(deal_comment, "FTMO_AI_") == 0)
+            deal_source = StringSubstr(deal_comment, 8);
+
         if(deal_profit>0)
         {
             g_consecutiveWins++;  g_consecutiveLosses=0;  g_totalWins++;
@@ -737,7 +822,8 @@ void UpdateStreakTracking()
             LogExecution(sym,direction,"TP",
                 0,
                 HistoryDealGetDouble(deal,DEAL_PRICE),
-                0,0,HistoryDealGetDouble(deal,DEAL_VOLUME),deal_profit,pos_id);
+                0,0,HistoryDealGetDouble(deal,DEAL_VOLUME),deal_profit,pos_id,
+                "",deal_source);
         }
         else
         {
@@ -746,7 +832,8 @@ void UpdateStreakTracking()
             LogExecution(sym,direction,"SL",
                 0,
                 HistoryDealGetDouble(deal,DEAL_PRICE),
-                0,0,HistoryDealGetDouble(deal,DEAL_VOLUME),deal_profit,pos_id);
+                0,0,HistoryDealGetDouble(deal,DEAL_VOLUME),deal_profit,pos_id,
+                "",deal_source);
         }
     }
     g_lastKnownHistoryCount = hist;
@@ -822,15 +909,9 @@ void OnTimer()
         // Always write features (data collection is priority #1)
         WriteFeatureCSV(i);
 
-        // Act on signal only if trading enabled and limits OK
+        // Execute all source-tagged signals for this symbol
         if(EnableTrading && !CheckFTMOLimits())
-        {
-            double conf=0, sl=0, tp=0, lot=FixedLotSize;
-            string action = ReadSignal(g_symbols[i], conf, sl, tp, lot);
-
-            if((action=="BUY"||action=="SELL") && conf>=MinConfidence)
-                ExecuteTrade(g_symbols[i], action, conf, sl, tp, lot);
-        }
+            ReadAndExecuteAllSignals(g_symbols[i]);
     }
 
     if(LogVerbose)

@@ -46,6 +46,10 @@ from core.ensemble_predictor import EnsemblePredictorV3
 # Import rule-based strategies
 from core.rule_based_strategies import RuleBasedStrategies
 
+# Import multi-strategy runner and unified trade logger
+from core.strategy_runner import StrategyRunner
+from core.unified_trade_logger import UnifiedTradeLogger, make_trade_id
+
 # Import feature expander (27 -> 105 features)
 from core.feature_expander import FeatureExpander
 
@@ -248,7 +252,18 @@ class LiveTradingSystemV5:
         
         # Initialize rule-based strategies
         self.rule_strategies = RuleBasedStrategies()
-        
+
+        # Initialize multi-strategy runner (6 EA translations + 9 rule-based)
+        self.strategy_runner = StrategyRunner()
+
+        # Initialize unified trade logger
+        _unified_log_path = str(self._system_root / "data" / "unified_trades.csv")
+        self.unified_logger = UnifiedTradeLogger(_unified_log_path)
+
+        # Tracked open positions per (symbol, source) to prevent duplicate entries
+        # No cap on total positions — each source can have one position per symbol
+        self._source_positions: dict = {}  # key: (symbol, source) -> trade_id
+
         # Initialize feature expander
         self.feature_expander = FeatureExpander()
         
@@ -1744,13 +1759,22 @@ class LiveTradingSystemV5:
             self.log_system(f"[SKIP] All {len(signals)} signals unchanged")
     
     def _write_per_symbol_signals(self, commands: list):
-        """Write individual signal_{SYMBOL}.txt files for Bridge EA to read."""
+        """
+        Write signal files for Bridge EA.
+        Format: signal_{SYMBOL}_{SOURCE}.txt (no header)
+        Fields: symbol,action,confidence,sl_price,tp_price,lot_size,trade_id,timestamp
+        Also logs every signal to the unified trade record.
+        """
         for cmd in commands:
             if cmd['action'] not in ('BUY', 'SELL'):
                 continue
-            sig_path = self.features_dir / f"signal_{cmd['symbol']}.txt"
+
+            source    = cmd.get('source', 'xgboost')
+            trade_id  = cmd.get('trade_id', make_trade_id(cmd['symbol'], source))
+            sig_path  = self.features_dir / f"signal_{cmd['symbol']}_{source}.txt"
+
+            # Write signal file for EA
             try:
-                # No header — EA reads fields sequentially: sym,action,conf,sl,tp,lot,ts
                 with open(sig_path, 'w') as _sf:
                     _sf.write(
                         f"{cmd['symbol']},"
@@ -1759,10 +1783,153 @@ class LiveTradingSystemV5:
                         f"{round(cmd.get('sl_price', 0), 8)},"
                         f"{round(cmd.get('tp_price', 0), 8)},"
                         f"{round(cmd.get('lot_size', 0.01), 2)},"
+                        f"{trade_id},"
                         f"{cmd['timestamp']}\n"
                     )
             except Exception as e:
-                self.log_system(f"[WARN] Could not write signal file for {cmd['symbol']}: {e}")
+                self.log_system(f"[WARN] Could not write signal file for {cmd['symbol']}/{source}: {e}")
+
+            # Log to unified trade record
+            try:
+                features = cmd.get('features', [])
+                self.unified_logger.log_signal(
+                    trade_id       = trade_id,
+                    symbol         = cmd['symbol'],
+                    signal_source  = source,
+                    source_type    = cmd.get('source_type', 'xgboost'),
+                    action         = cmd['action'],
+                    confidence     = cmd.get('confidence', 0.0),
+                    confluence_score = cmd.get('confluence_score', 0.0),
+                    dimension_votes  = str(cmd.get('dimension_votes', '')),
+                    dimension_count  = cmd.get('dimension_count', 0),
+                    danger_score     = cmd.get('danger_score', 0.0),
+                    strategy_votes   = str(cmd.get('strategy_votes', '')),
+                    close      = float(features[0])  if len(features) > 0  else 0.0,
+                    rsi        = float(features[12]) if len(features) > 12 else 0.0,
+                    atr        = float(features[16]) if len(features) > 16 else 0.0,
+                    momentum   = float(features[15]) if len(features) > 15 else 0.0,
+                    volatility = float(features[20]) if len(features) > 20 else 0.0,
+                    would_execute    = True,
+                    actually_executed = True,
+                )
+                # Track open (symbol, source) to prevent duplicate entries
+                self._source_positions[(cmd['symbol'], source)] = trade_id
+            except Exception as e:
+                self.log_system(f"[WARN] Unified log failed for {cmd['symbol']}/{source}: {e}")
+
+    def _run_strategy_engine(self, features_dict: dict):
+        """
+        Run all 15 independent strategy sources on every symbol.
+        Each fired signal gets its own signal file and unified trade record row.
+        No gates — signal fires → order sent.
+        One position per (symbol, source) at a time.
+        """
+        if not features_dict:
+            return
+
+        # Build OHLCV DataFrames from historical buffer
+        ohlcv_dict  = {}
+        point_dict  = {}
+        for symbol, features in features_dict.items():
+            if symbol in self.historical_ohlc and len(self.historical_ohlc[symbol]) >= 3:
+                ohlcv_dict[symbol] = self.historical_ohlc[symbol].copy()
+            point_dict[symbol] = 0.01 if 'JPY' in symbol else 0.0001
+
+        if not ohlcv_dict:
+            return
+
+        # Run all strategy sources
+        all_signals = self.strategy_runner.run_all_symbols(
+            ohlcv_dict   = ohlcv_dict,
+            features_dict = features_dict,
+            point_dict   = point_dict,
+        )
+
+        strategy_signal_count = 0
+        ts = datetime.now().isoformat()
+
+        for symbol, fired in all_signals.items():
+            features = features_dict.get(symbol, [])
+            for sig in fired:
+                source = sig['source']
+                action = sig['action']
+
+                # Skip if this source already has an open position on this symbol
+                if (symbol, source) in self._source_positions:
+                    continue
+
+                trade_id = make_trade_id(symbol, source)
+                point    = point_dict.get(symbol, 0.0001)
+                close    = float(features[0]) if len(features) > 0 else 0.0
+                atr      = float(features[16]) if len(features) > 16 else 0.0001
+
+                sl_dist = sig['sl_points'] * point
+                tp_dist = sig['tp_points'] * point
+                if action == 'BUY':
+                    sl_price = close - sl_dist
+                    tp_price = close + tp_dist
+                else:
+                    sl_price = close + sl_dist
+                    tp_price = close - tp_dist
+
+                lot = sig.get('lot', 0.01)
+
+                # Write signal file for EA
+                sig_path = self.features_dir / f"signal_{symbol}_{source}.txt"
+                try:
+                    with open(sig_path, 'w') as _sf:
+                        _sf.write(
+                            f"{symbol},{action},1.0,"
+                            f"{round(sl_price, 6)},"
+                            f"{round(tp_price, 6)},"
+                            f"{lot},"
+                            f"{trade_id},"
+                            f"{ts}\n"
+                        )
+                except Exception as e:
+                    self.log_system(f"[WARN] Strategy signal write failed {symbol}/{source}: {e}")
+                    continue
+
+                # Log to unified trade record
+                try:
+                    self.unified_logger.log_signal(
+                        trade_id       = trade_id,
+                        symbol         = symbol,
+                        signal_source  = source,
+                        source_type    = sig.get('source_type', 'strategy'),
+                        action         = action,
+                        confidence     = 1.0,
+                        confluence_score = 0.0,
+                        dimension_votes  = '',
+                        dimension_count  = 0,
+                        danger_score     = 0.0,
+                        strategy_votes   = str(sig.get('indicators', {})),
+                        close      = float(features[0])  if len(features) > 0  else 0.0,
+                        rsi        = float(features[12]) if len(features) > 12 else 0.0,
+                        atr        = atr,
+                        momentum   = float(features[15]) if len(features) > 15 else 0.0,
+                        volatility = float(features[20]) if len(features) > 20 else 0.0,
+                        would_execute    = True,
+                        actually_executed = True,
+                    )
+                    self._source_positions[(symbol, source)] = trade_id
+                    strategy_signal_count += 1
+                except Exception as e:
+                    self.log_system(f"[WARN] Unified log failed {symbol}/{source}: {e}")
+
+        if strategy_signal_count:
+            self.log_system(f"[STRATEGIES] {strategy_signal_count} strategy signals fired")
+
+    def _clear_closed_source_positions(self):
+        """Remove (symbol, source) entries for positions that are now closed."""
+        try:
+            open_pos = self.get_open_positions()
+            open_symbols = set(open_pos.keys())
+            closed = [k for k in self._source_positions if k[0] not in open_symbols]
+            for k in closed:
+                del self._source_positions[k]
+        except Exception:
+            pass
 
     def log_predictions(self, ml_results, filtered_results, signals):
         """Log all predictions to CSV"""
@@ -1896,6 +2063,7 @@ class LiveTradingSystemV5:
         
         # Sync positions
         self.sync_positions_from_mt5()
+        self._clear_closed_source_positions()
         
         # Check scaling
         scaling_signals = self.check_scaling_opportunities(features_dict)
@@ -1932,7 +2100,6 @@ class LiveTradingSystemV5:
                 unanimous = "✓" if signal.get('unanimous', False) else ""
                 strat_agree = "✓" if signal.get('strategies_agree', False) else "✗"
                 strat_votes = signal.get('strategy_votes', {})
-                
                 self.log_system(
                     f"   [SIGNAL] {signal['pair']}: {signal['action']} "
                     f"(conf: {signal['confidence']:.1%}, "
@@ -1940,13 +2107,19 @@ class LiveTradingSystemV5:
                     f"models: {model_votes} {unanimous}, "
                     f"strat: {strat_votes.get('BUY',0)}B/{strat_votes.get('SELL',0)}S {strat_agree})"
                 )
-            
+
             self.log_predictions(ml_results, filtered_results, signals)
             self.write_trade_commands(signals)
         else:
             self.log_system("   [HOLD] No signals after confluence filtering")
             self.log_predictions(ml_results, filtered_results, signals)
             self.write_trade_commands([])
+
+        # ================================================================
+        # STRATEGY ENGINE — 15 independent sources (6 EA + 9 rule-based)
+        # Runs alongside XGBoost. No gates. Each source files its own trade.
+        # ================================================================
+        self._run_strategy_engine(features_dict)
         
         # Log scaling
         if scaling_signals:
