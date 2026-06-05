@@ -243,7 +243,8 @@ double GetPipValue(string symbol)
 {
     int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
     double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
-    return (digits == 5 || digits == 3) ? point * 10 : point;
+    double pip = (digits == 5 || digits == 3) ? point * 10 : point;
+    return (pip > 0) ? pip : 0.0001;  // never return 0 — prevents zero divide
 }
 
 //+------------------------------------------------------------------+
@@ -361,20 +362,38 @@ string ReadSignalFile(string sig_path, double &out_conf, double &out_sl,
     return action;
 }
 
-// Scan Common\Files for all signal_{sym}_*.txt files and execute each
-void ReadAndExecuteAllSignals(string sym)
+// Single scan of Common\Files for ALL signal_*_*.txt files — one pass per timer tick
+// Fixes: zero divide from FileFindFirst overwriting sym, and 27x per-symbol scan overhead
+void ReadAndExecuteAllSignals()
 {
-    // List all files matching signal_{sym}_*.txt
-    string search = "signal_" + sym + "_";
-    long   fh_search = FileFindFirst(search + "*.txt", sym, FILE_COMMON);
-    if(fh_search == INVALID_HANDLE) return;
-
     string fname;
+    long fh = FileFindFirst("signal_*.txt", fname, FILE_COMMON);
+    if(fh == INVALID_HANDLE) return;
+
     do
     {
-        fname = "";
-        if(!FileFindNext(fh_search, fname)) break;
-        if(StringLen(fname) == 0) break;
+        if(StringLen(fname) == 0) continue;
+
+        // Format: signal_{SYM}_{SOURCE}.txt
+        // OANDA symbols never contain underscores (EURUSD.sim, XAUUSD.sim etc.)
+        // Sources can contain underscores (dema_supertrend, dema_rsi_hf)
+        // So split on the FIRST underscore after "signal_"
+        // e.g. signal_EURUSD.sim_dema_supertrend.txt
+        //      after "signal_" = EURUSD.sim_dema_supertrend.txt
+        //      first _ at pos 9 → sym=EURUSD.sim  source=dema_supertrend
+
+        // Strip "signal_" prefix (7 chars)
+        string after_prefix = StringSubstr(fname, 7);   // EURUSD.sim_dema_supertrend.txt
+        StringReplace(after_prefix, ".txt", "");          // EURUSD.sim_dema_supertrend
+
+        // Find first underscore → boundary between sym and source
+        int first_us = StringFind(after_prefix, "_");
+        if(first_us < 0) continue;  // no source — skip (old format signal_SYM.txt)
+
+        string sym_part = StringSubstr(after_prefix, 0, first_us);            // EURUSD.sim
+        string src_part = StringSubstr(after_prefix, first_us + 1);           // dema_supertrend
+
+        if(StringLen(sym_part) == 0 || StringLen(src_part) == 0) continue;
 
         if(!FileIsExist(fname, FILE_COMMON)) continue;
 
@@ -383,17 +402,11 @@ void ReadAndExecuteAllSignals(string sym)
         string action = ReadSignalFile(fname, conf, sl, tp, lot, trade_id);
 
         if((action=="BUY" || action=="SELL") && conf >= MinConfidence)
-        {
-            // Extract source name from filename: signal_{sym}_{source}.txt
-            string source = fname;
-            StringReplace(source, "signal_" + sym + "_", "");
-            StringReplace(source, ".txt", "");
-            ExecuteTradeWithId(sym, action, conf, sl, tp, lot, trade_id, source);
-        }
+            ExecuteTradeWithId(sym_part, action, conf, sl, tp, lot, trade_id, src_part);
     }
-    while(true);
+    while(FileFindNext(fh, fname));
 
-    FileFindClose(fh_search);
+    FileFindClose(fh);
 }
 
 //+------------------------------------------------------------------+
@@ -469,22 +482,45 @@ void ExecuteTradeWithId(string sym, string action, double confidence,
     if(!EnableTrading) return;
     if(CheckFTMOLimits()) return;
 
+    // Enforce minimum lot size for this symbol
+    double min_lot  = SymbolInfoDouble(sym, SYMBOL_VOLUME_MIN);
+    double lot_step = SymbolInfoDouble(sym, SYMBOL_VOLUME_STEP);
+    if(min_lot <= 0) min_lot = 0.01;
+    if(lot < min_lot) lot = min_lot;
+    if(lot_step > 0) lot = MathFloor(lot / lot_step) * lot_step;
+
     double spread_pips = (SymbolInfoDouble(sym,SYMBOL_ASK)-SymbolInfoDouble(sym,SYMBOL_BID))/GetPipValue(sym);
     if(spread_pips > MaxSpreadPips) return;
 
-    double atr   = GetATRForSymbol(sym);
+    double atr     = GetATRForSymbol(sym);
+    int    digits  = (int)SymbolInfoInteger(sym, SYMBOL_DIGITS);
+    double pt      = SymbolInfoDouble(sym, SYMBOL_POINT);
+    // Minimum stop distance required by broker (in price units), add 10% buffer
+    double min_stop = (SymbolInfoInteger(sym, SYMBOL_TRADE_STOPS_LEVEL) * pt) * 1.1;
+    if(min_stop <= 0) min_stop = atr * 0.5;  // fallback: half ATR
+
     double entry = 0;
 
     if(action == "BUY")
     {
         entry = SymbolInfoDouble(sym, SYMBOL_ASK);
-        if(sl_price<=0) sl_price = entry - atr*SL_ATR_Multiplier;
-        if(tp_price<=0) tp_price = entry + atr*SL_ATR_Multiplier*RiskRewardRatio;
-        if(g_trade.Buy(lot,sym,entry,sl_price,tp_price,"FTMO_AI_" + source))
+        // Validate / fix SL: must be BELOW entry by at least min_stop
+        if(sl_price <= 0 || sl_price >= entry || (entry - sl_price) < min_stop)
+            sl_price = entry - MathMax(atr * SL_ATR_Multiplier, min_stop * 1.5);
+        // Validate / fix TP: must be ABOVE entry by at least min_stop
+        if(tp_price <= 0 || tp_price <= entry || (tp_price - entry) < min_stop)
+            tp_price = entry + MathMax(atr * SL_ATR_Multiplier * RiskRewardRatio, min_stop * 2.0);
+
+        sl_price = NormalizeDouble(sl_price, digits);
+        tp_price = NormalizeDouble(tp_price, digits);
+
+        if(g_trade.Buy(lot, sym, entry, sl_price, tp_price, "FTMO_AI_" + source))
         {
             ulong ticket = g_trade.ResultOrder();
             Print("[BUY] ",sym," src=",source," lot=",DoubleToString(lot,2),
-                  " entry=",DoubleToString(entry,5)," id=",trade_id);
+                  " entry=",DoubleToString(entry,digits),
+                  " SL=",DoubleToString(sl_price,digits),
+                  " TP=",DoubleToString(tp_price,digits));
             LogExecution(sym,"BUY","OPEN",entry,0,sl_price,tp_price,lot,0,ticket,trade_id,source);
         }
         else Print("[ERROR] Buy failed (",source,"): ",g_trade.ResultRetcodeDescription());
@@ -492,13 +528,23 @@ void ExecuteTradeWithId(string sym, string action, double confidence,
     else if(action == "SELL")
     {
         entry = SymbolInfoDouble(sym, SYMBOL_BID);
-        if(sl_price<=0) sl_price = entry + atr*SL_ATR_Multiplier;
-        if(tp_price<=0) tp_price = entry - atr*SL_ATR_Multiplier*RiskRewardRatio;
-        if(g_trade.Sell(lot,sym,entry,sl_price,tp_price,"FTMO_AI_" + source))
+        // Validate / fix SL: must be ABOVE entry by at least min_stop
+        if(sl_price <= 0 || sl_price <= entry || (sl_price - entry) < min_stop)
+            sl_price = entry + MathMax(atr * SL_ATR_Multiplier, min_stop * 1.5);
+        // Validate / fix TP: must be BELOW entry by at least min_stop
+        if(tp_price <= 0 || tp_price >= entry || (entry - tp_price) < min_stop)
+            tp_price = entry - MathMax(atr * SL_ATR_Multiplier * RiskRewardRatio, min_stop * 2.0);
+
+        sl_price = NormalizeDouble(sl_price, digits);
+        tp_price = NormalizeDouble(tp_price, digits);
+
+        if(g_trade.Sell(lot, sym, entry, sl_price, tp_price, "FTMO_AI_" + source))
         {
             ulong ticket = g_trade.ResultOrder();
             Print("[SELL] ",sym," src=",source," lot=",DoubleToString(lot,2),
-                  " entry=",DoubleToString(entry,5)," id=",trade_id);
+                  " entry=",DoubleToString(entry,digits),
+                  " SL=",DoubleToString(sl_price,digits),
+                  " TP=",DoubleToString(tp_price,digits));
             LogExecution(sym,"SELL","OPEN",entry,0,sl_price,tp_price,lot,0,ticket,trade_id,source);
         }
         else Print("[ERROR] Sell failed (",source,"): ",g_trade.ResultRetcodeDescription());
@@ -760,13 +806,20 @@ void ManagePositions()
             }
         }
 
+        // Get fresh price just before any modify to avoid race conditions
+        double ask_now = SymbolInfoDouble(sym, SYMBOL_ASK);
+        double bid_now = SymbolInfoDouble(sym, SYMBOL_BID);
+
         // Break-even
         if(EnableBreakEven && rr_now>=BE_TriggerRR)
         {
             double be_sl = (type==POSITION_TYPE_BUY)
                 ? entry+BE_BufferPips*pip : entry-BE_BufferPips*pip;
             bool needs = (type==POSITION_TYPE_BUY&&sl<be_sl)||(type==POSITION_TYPE_SELL&&sl>be_sl);
-            if(needs)
+            // Validate new SL is still on correct side of current price
+            bool valid_be = (type==POSITION_TYPE_BUY  && be_sl < bid_now) ||
+                            (type==POSITION_TYPE_SELL && be_sl > ask_now);
+            if(needs && valid_be)
             {
                 g_trade.PositionModify(ticket,be_sl,tp);
                 if(LogVerbose) Print("[BE] ",sym," SL→",DoubleToString(be_sl,5));
@@ -779,7 +832,10 @@ void ManagePositions()
             double new_sl = (type==POSITION_TYPE_BUY) ? current-eff_trail : current+eff_trail;
             bool trail_ok = (type==POSITION_TYPE_BUY  && new_sl>sl+pip) ||
                             (type==POSITION_TYPE_SELL && new_sl<sl-pip && sl>0);
-            if(trail_ok)
+            // Validate new SL is still on correct side of current price before sending
+            bool valid_sl = (type==POSITION_TYPE_BUY  && new_sl < bid_now) ||
+                            (type==POSITION_TYPE_SELL && new_sl > ask_now);
+            if(trail_ok && valid_sl)
             {
                 g_trade.PositionModify(ticket,new_sl,tp);
                 if(LogVerbose) Print("[TRAIL] ",sym," SL ",DoubleToString(sl,5),"→",DoubleToString(new_sl,5));
@@ -904,15 +960,13 @@ void OnTimer()
     ManagePositions();
     WriteOpenPositions();
 
+    // Write features for all symbols (priority #1 — always runs)
     for(int i=0; i<g_symbol_count; i++)
-    {
-        // Always write features (data collection is priority #1)
         WriteFeatureCSV(i);
 
-        // Execute all source-tagged signals for this symbol
-        if(EnableTrading && !CheckFTMOLimits())
-            ReadAndExecuteAllSignals(g_symbols[i]);
-    }
+    // Single-pass signal scan — one FileFindFirst for all sources across all symbols
+    if(EnableTrading && !CheckFTMOLimits())
+        ReadAndExecuteAllSignals();
 
     if(LogVerbose)
     {

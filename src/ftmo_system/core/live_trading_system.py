@@ -260,9 +260,10 @@ class LiveTradingSystemV5:
         _unified_log_path = str(self._system_root / "data" / "unified_trades.csv")
         self.unified_logger = UnifiedTradeLogger(_unified_log_path)
 
-        # Tracked open positions per (symbol, source) to prevent duplicate entries
-        # No cap on total positions — each source can have one position per symbol
-        self._source_positions: dict = {}  # key: (symbol, source) -> trade_id
+        # Cooldown tracking per (symbol, source) — prevents re-firing every 3s
+        # Each source gets one signal per symbol per 15-minute candle minimum
+        self._source_cooldowns: dict = {}   # (symbol, source) -> last_signal_datetime
+        self._STRATEGY_COOLDOWN_SEC = 900   # 15 minutes
 
         # Initialize feature expander
         self.feature_expander = FeatureExpander()
@@ -1813,7 +1814,7 @@ class LiveTradingSystemV5:
                     actually_executed = True,
                 )
                 # Track open (symbol, source) to prevent duplicate entries
-                self._source_positions[(cmd['symbol'], source)] = trade_id
+                self._source_cooldowns[(cmd['symbol'], source)] = trade_id
             except Exception as e:
                 self.log_system(f"[WARN] Unified log failed for {cmd['symbol']}/{source}: {e}")
 
@@ -1854,24 +1855,20 @@ class LiveTradingSystemV5:
                 source = sig['source']
                 action = sig['action']
 
-                # Skip if this source already has an open position on this symbol
-                if (symbol, source) in self._source_positions:
+                # Enforce 15-min cooldown per (symbol, source)
+                now = datetime.now()
+                last = self._source_cooldowns.get((symbol, source))
+                if last and (now - last).total_seconds() < self._STRATEGY_COOLDOWN_SEC:
                     continue
 
                 trade_id = make_trade_id(symbol, source)
-                point    = point_dict.get(symbol, 0.0001)
-                close    = float(features[0]) if len(features) > 0 else 0.0
+                close    = float(features[0])  if len(features) > 0  else 0.0
                 atr      = float(features[16]) if len(features) > 16 else 0.0001
 
-                sl_dist = sig['sl_points'] * point
-                tp_dist = sig['tp_points'] * point
-                if action == 'BUY':
-                    sl_price = close - sl_dist
-                    tp_price = close + tp_dist
-                else:
-                    sl_price = close + sl_dist
-                    tp_price = close - tp_dist
-
+                # Send sl=0, tp=0 — EA calculates from live price + ATR per symbol
+                # Avoids wrong pip values for indices (US500 point=0.1) and crypto
+                sl_price = 0.0
+                tp_price = 0.0
                 lot = sig.get('lot', 0.01)
 
                 # Write signal file for EA
@@ -1912,7 +1909,7 @@ class LiveTradingSystemV5:
                         would_execute    = True,
                         actually_executed = True,
                     )
-                    self._source_positions[(symbol, source)] = trade_id
+                    self._source_cooldowns[(symbol, source)] = now
                     strategy_signal_count += 1
                 except Exception as e:
                     self.log_system(f"[WARN] Unified log failed {symbol}/{source}: {e}")
@@ -1921,13 +1918,15 @@ class LiveTradingSystemV5:
             self.log_system(f"[STRATEGIES] {strategy_signal_count} strategy signals fired")
 
     def _clear_closed_source_positions(self):
-        """Remove (symbol, source) entries for positions that are now closed."""
+        """Expire cooldowns older than the cooldown window."""
         try:
-            open_pos = self.get_open_positions()
-            open_symbols = set(open_pos.keys())
-            closed = [k for k in self._source_positions if k[0] not in open_symbols]
-            for k in closed:
-                del self._source_positions[k]
+            now = datetime.now()
+            expired = [
+                k for k, t in self._source_cooldowns.items()
+                if (now - t).total_seconds() >= self._STRATEGY_COOLDOWN_SEC
+            ]
+            for k in expired:
+                del self._source_cooldowns[k]
         except Exception:
             pass
 
