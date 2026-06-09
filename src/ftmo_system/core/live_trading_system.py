@@ -50,6 +50,13 @@ from core.rule_based_strategies import RuleBasedStrategies
 from core.strategy_runner import StrategyRunner
 from core.unified_trade_logger import UnifiedTradeLogger, make_trade_id
 
+# Import Azure bridge for Colab cloud inference integration
+try:
+    from core.azure_bridge import AzureBridge
+    HAS_AZURE = True
+except ImportError:
+    HAS_AZURE = False
+
 # Import feature expander (27 -> 105 features)
 from core.feature_expander import FeatureExpander
 
@@ -265,6 +272,17 @@ class LiveTradingSystemV5:
         self._source_cooldowns: dict = {}   # (symbol, source) -> last_signal_datetime
         self._STRATEGY_COOLDOWN_SEC = 900   # 15 minutes
 
+        # Azure bridge — uploads features to cloud, downloads Colab predictions
+        if HAS_AZURE:
+            self.azure = AzureBridge()
+            if self.azure.enabled:
+                self.log_system("[AZURE] Bridge connected — Colab inference active (lgbm + catboost)")
+            else:
+                self.log_system("[AZURE] Bridge disabled — running local sources only")
+        else:
+            self.azure = None
+            self.log_system("[AZURE] azure_bridge not available — Colab integration skipped")
+
         # Initialize feature expander
         self.feature_expander = FeatureExpander()
         
@@ -439,6 +457,10 @@ class LiveTradingSystemV5:
             csv_path = self.features_dir / f"{pair}_features.csv"
             if not csv_path.exists():
                 continue
+
+            # Upload fresh features to Azure so Colab can run inference
+            if self.azure and self.azure.enabled:
+                self.azure.upload_features(pair, str(csv_path))
             # Note: symbol manager now returns exact MT5 names (e.g. EURUSD.sim)
             # so csv_path should match directly
 
@@ -1916,6 +1938,72 @@ class LiveTradingSystemV5:
 
         if strategy_signal_count:
             self.log_system(f"[STRATEGIES] {strategy_signal_count} strategy signals fired")
+
+        # ── Colab cloud inference signals (lgbm + catboost) ──────────────
+        # Download fresh predictions uploaded by Google Colab every 30 seconds.
+        # Each model is an independent signal source going through the same
+        # 15-min cooldown and signal file pipeline as all other sources.
+        if self.azure and self.azure.enabled:
+            try:
+                colab_preds = self.azure.get_all_predictions(list(features_dict.keys()))
+                colab_count = 0
+                for symbol, src_preds in colab_preds.items():
+                    features = features_dict.get(symbol, np.zeros(27))
+                    atr = float(features[16]) if len(features) > 16 else 0.001
+                    for src_name, pred in src_preds.items():
+                        # src_name is 'lgbm' or 'catboost'
+                        source   = f"colab_{src_name}"
+                        action   = pred.get("action", "HOLD")
+                        conf     = float(pred.get("confidence", 0.0))
+                        if action not in ("BUY", "SELL"):
+                            continue
+
+                        # 15-min cooldown
+                        now  = datetime.now()
+                        last = self._source_cooldowns.get((symbol, source))
+                        if last and (now - last).total_seconds() < self._STRATEGY_COOLDOWN_SEC:
+                            continue
+
+                        # Write signal file for EA
+                        sig_path = self.features_dir / f"signal_{symbol}_{source}.txt"
+                        lot      = 0.01
+                        trade_id = make_trade_id(symbol, source)
+                        try:
+                            with open(sig_path, 'w') as sf:
+                                sf.write(f"{symbol},{action},{conf:.4f},0.0,0.0,{lot},{trade_id},{now.isoformat()}\n")
+                        except Exception as e:
+                            self.log_system(f"[WARN] Colab signal write failed {symbol}/{source}: {e}")
+                            continue
+
+                        # Log to unified logger
+                        if self.unified_logger:
+                            try:
+                                self.unified_logger.log_signal(
+                                    trade_id       = trade_id,
+                                    symbol         = symbol,
+                                    signal_source  = source,
+                                    source_type    = "colab_cloud",
+                                    action         = action,
+                                    confidence     = conf,
+                                    close          = float(features[0]) if len(features) > 0 else 0.0,
+                                    rsi            = float(features[12]) if len(features) > 12 else 0.0,
+                                    atr            = atr,
+                                    momentum       = float(features[15]) if len(features) > 15 else 0.0,
+                                    volatility     = float(features[20]) if len(features) > 20 else 0.0,
+                                    would_execute  = True,
+                                    actually_executed = True,
+                                )
+                            except Exception:
+                                pass
+
+                        self._source_cooldowns[(symbol, source)] = now
+                        colab_count += 1
+                        self.log_system(f"[COLAB] {symbol} {source}: {action} conf={conf:.3f}")
+
+                if colab_count:
+                    self.log_system(f"[COLAB] {colab_count} cloud signals dispatched")
+            except Exception as e:
+                self.log_system(f"[COLAB] Error processing cloud predictions: {e}")
 
     def _clear_closed_source_positions(self):
         """Expire cooldowns older than the cooldown window."""
