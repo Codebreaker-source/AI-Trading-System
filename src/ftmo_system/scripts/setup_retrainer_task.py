@@ -104,7 +104,7 @@ def create_task():
     os.remove(xml_path)
 
     if result.returncode == 0:
-        print(f"✓ Task '{TASK_NAME}' created successfully.")
+        print(f"[OK] Task '{TASK_NAME}' created successfully.")
         print()
         print(f"The retrainer will run every {RUN_DAY} at {RUN_TIME_LOCAL}.")
         print("It trains all 4 model types and auto-pushes updated models to GitHub.")
@@ -128,7 +128,7 @@ def delete_task():
         capture_output=True, text=True
     )
     if result.returncode == 0:
-        print(f"✓ Task '{TASK_NAME}' deleted.")
+        print(f"[OK] Task '{TASK_NAME}' deleted.")
     else:
         print(f"Task not found or could not be deleted:\n{result.stderr}")
 
