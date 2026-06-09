@@ -1,8 +1,9 @@
 """
 Daily XGBoost retraining from execution log data.
 Run once per day (scheduled via run_system.py or cron).
-Reads trades.csv, labels outcomes, trains per-symbol XGBoost models.
-Only replaces an existing model if the new one is at least as accurate.
+Reads trades.csv, labels outcomes (3-tier profit-aware), trains per-symbol
+XGBoost models with sample_weight.  Only replaces an existing model if the
+new one is at least as accurate.
 """
 
 import os
@@ -23,13 +24,10 @@ from sklearn.preprocessing import LabelEncoder
 BASE_DIR = Path(__file__).parent.parent
 sys.path.insert(0, str(BASE_DIR))
 
-from core.feature_expander import expand_features  # noqa: E402
+from core.feature_expander import expand_features          # noqa: E402
+from training.data_labeler import label_dataframe, LABEL_HOLD, LABEL_BUY, LABEL_SELL  # noqa: E402
 
 logger = logging.getLogger(__name__)
-
-LABEL_HOLD = 0
-LABEL_BUY  = 1
-LABEL_SELL = 2
 
 REQUIRED_TRADE_COLS = [
     "symbol", "direction", "outcome",
@@ -46,23 +44,6 @@ FEATURE_27 = [
     "bullish_sentiment", "bearish_sentiment", "net_sentiment",
 ]
 
-
-def label_trade(direction: str, outcome: str) -> int:
-    """
-    Convert execution log row into training label.
-      BUY  + TP  → BUY  (1)
-      BUY  + SL  → SELL (2)   (wrong direction)
-      SELL + TP  → SELL (2)
-      SELL + SL  → BUY  (1)   (wrong direction)
-      HOLD / any other → HOLD (0)
-    """
-    d = str(direction).upper().strip()
-    o = str(outcome).upper().strip()
-    if d == "BUY":
-        return LABEL_BUY if o == "TP" else LABEL_SELL if o == "SL" else LABEL_HOLD
-    if d == "SELL":
-        return LABEL_SELL if o == "TP" else LABEL_BUY if o == "SL" else LABEL_HOLD
-    return LABEL_HOLD
 
 
 def load_execution_log(trades_csv: str) -> pd.DataFrame:
@@ -100,15 +81,28 @@ def extract_feature_matrix(df: pd.DataFrame) -> np.ndarray | None:
     return X
 
 
-def train_xgboost(X: np.ndarray, y: np.ndarray, holdout_pct: float = 0.2):
-    """Train XGBoost, return (model, train_acc, val_acc)."""
+def train_xgboost(X: np.ndarray, y: np.ndarray,
+                  sample_weight: np.ndarray | None = None,
+                  holdout_pct: float = 0.2):
+    """
+    Train XGBoost with optional sample_weight (for 3-tier labeling).
+    Returns (model, train_acc, val_acc).
+    """
     if len(np.unique(y)) < 2:
         logger.warning("Only one class in labels — skipping training")
         return None, 0.0, 0.0
 
-    X_train, X_val, y_train, y_val = train_test_split(
-        X, y, test_size=holdout_pct, random_state=42, stratify=y
-    )
+    # Propagate sample weights through the train/val split
+    if sample_weight is not None:
+        X_train, X_val, y_train, y_val, w_train, w_val = train_test_split(
+            X, y, sample_weight,
+            test_size=holdout_pct, random_state=42, stratify=y
+        )
+    else:
+        X_train, X_val, y_train, y_val = train_test_split(
+            X, y, test_size=holdout_pct, random_state=42, stratify=y
+        )
+        w_train = w_val = None
 
     model = XGBClassifier(
         n_estimators=200,
@@ -123,7 +117,12 @@ def train_xgboost(X: np.ndarray, y: np.ndarray, holdout_pct: float = 0.2):
         random_state=42,
         n_jobs=-1,
     )
-    model.fit(X_train, y_train, eval_set=[(X_val, y_val)], verbose=False)
+    model.fit(
+        X_train, y_train,
+        sample_weight=w_train,
+        eval_set=[(X_val, y_val)],
+        verbose=False,
+    )
 
     train_acc = accuracy_score(y_train, model.predict(X_train))
     val_acc   = accuracy_score(y_val,   model.predict(X_val))
@@ -159,9 +158,9 @@ def retrain_symbol(
         return result
 
     symbol_df = symbol_df.copy()
-    symbol_df["label"] = symbol_df.apply(
-        lambda r: label_trade(r["direction"], r["outcome"]), axis=1
-    )
+
+    # 3-tier profit-aware labeling → (label, sample_weight) per row
+    symbol_df["label"], symbol_df["weight"] = label_dataframe(symbol_df)
 
     X = extract_feature_matrix(symbol_df)
     if X is None:
@@ -169,21 +168,30 @@ def retrain_symbol(
         return result
 
     y = symbol_df["label"].values
+    w = symbol_df["weight"].values
 
     # Remove rows with NaN features
     valid_mask = ~np.isnan(X).any(axis=1)
-    X, y = X[valid_mask], y[valid_mask]
+    X, y, w = X[valid_mask], y[valid_mask], w[valid_mask]
 
     if len(X) < min_trades:
         logger.info(f"{symbol}: after NaN drop only {len(X)} usable rows — skipping")
         return result
+
+    # Log label distribution for transparency
+    from collections import Counter
+    dist = Counter(y.tolist())
+    logger.info(
+        f"{symbol}: labels SELL={dist.get(0,0)} HOLD={dist.get(1,0)} BUY={dist.get(2,0)}, "
+        f"mean_weight={w.mean():.3f}"
+    )
 
     model_filename = f"{symbol}_xgboost_CLEAN27.joblib"
     model_path = os.path.join(model_dir, model_filename)
 
     existing_val_acc = evaluate_existing_model(model_path, X, y, holdout_pct)
 
-    new_model, train_acc, val_acc = train_xgboost(X, y, holdout_pct)
+    new_model, train_acc, val_acc = train_xgboost(X, y, sample_weight=w, holdout_pct=holdout_pct)
     if new_model is None:
         result["status"] = "training_failed"
         return result

@@ -881,11 +881,12 @@ void UpdateStreakTracking()
         if(deal==0||HistoryDealGetInteger(deal,DEAL_MAGIC)!=MagicNumber) continue;
         if(HistoryDealGetInteger(deal,DEAL_ENTRY)!=DEAL_ENTRY_OUT) continue;
 
-        double deal_profit = HistoryDealGetDouble(deal,DEAL_PROFIT);
-        string sym         = HistoryDealGetString(deal,DEAL_SYMBOL);
-        long   deal_type   = HistoryDealGetInteger(deal,DEAL_TYPE);
-        string direction   = (deal_type==DEAL_TYPE_BUY) ? "BUY" : "SELL";
-        ulong  pos_id      = (ulong)HistoryDealGetInteger(deal,DEAL_POSITION_ID);
+        double deal_profit  = HistoryDealGetDouble(deal,DEAL_PROFIT);
+        string sym          = HistoryDealGetString(deal,DEAL_SYMBOL);
+        long   deal_type    = HistoryDealGetInteger(deal,DEAL_TYPE);
+        string direction    = (deal_type==DEAL_TYPE_BUY) ? "BUY" : "SELL";
+        ulong  pos_id       = (ulong)HistoryDealGetInteger(deal,DEAL_POSITION_ID);
+        long   close_reason = HistoryDealGetInteger(deal,DEAL_REASON);
 
         // Extract source from deal comment (format: "FTMO_AI_{source}")
         string deal_comment = HistoryDealGetString(deal, DEAL_COMMENT);
@@ -893,26 +894,33 @@ void UpdateStreakTracking()
         if(StringFind(deal_comment, "FTMO_AI_") == 0)
             deal_source = StringSubstr(deal_comment, 8);
 
-        if(deal_profit>0)
+        // 3-tier outcome for profit-aware ML labeling:
+        //   TP    = actual take-profit order hit  (DEAL_REASON_TP)
+        //   TRAIL = trailing stop closed in profit (DEAL_REASON_SL + profit>0)
+        //   SL    = stop loss closed at a loss
+        string outcome;
+        if(close_reason == DEAL_REASON_TP)
+            outcome = "TP";
+        else if(deal_profit > 0)
+            outcome = "TRAIL";
+        else
+            outcome = "SL";
+
+        if(deal_profit > 0)
         {
             g_consecutiveWins++;  g_consecutiveLosses=0;  g_totalWins++;
             g_pyramidingEnabled = (g_consecutiveWins>=WinStreak_PyramidTrigger);
-            LogExecution(sym,direction,"TP",
-                0,
-                HistoryDealGetDouble(deal,DEAL_PRICE),
-                0,0,HistoryDealGetDouble(deal,DEAL_VOLUME),deal_profit,pos_id,
-                "",deal_source);
         }
         else
         {
             g_consecutiveLosses++; g_consecutiveWins=0; g_totalLosses++;
             g_pyramidingEnabled=false;
-            LogExecution(sym,direction,"SL",
-                0,
-                HistoryDealGetDouble(deal,DEAL_PRICE),
-                0,0,HistoryDealGetDouble(deal,DEAL_VOLUME),deal_profit,pos_id,
-                "",deal_source);
         }
+        LogExecution(sym, direction, outcome,
+            0,
+            HistoryDealGetDouble(deal,DEAL_PRICE),
+            0, 0, HistoryDealGetDouble(deal,DEAL_VOLUME), deal_profit, pos_id,
+            "", deal_source);
     }
     g_lastKnownHistoryCount = hist;
 }
