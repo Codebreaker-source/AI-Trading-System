@@ -977,6 +977,17 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 void OnTimer()
 {
+    // Re-discover symbols every 100 ticks (~5 min) to pick up newly added Market Watch symbols
+    static int s_rediscover_tick = 0;
+    if(++s_rediscover_tick >= 100)
+    {
+        s_rediscover_tick = 0;
+        int prev = g_symbol_count;
+        DiscoverSymbols();
+        if(g_symbol_count != prev)
+            Print("[SYMBOLS] Re-discovery: ", prev, " → ", g_symbol_count, " symbols");
+    }
+
     CheckNewDay();
     UpdateStreakTracking();
     ManagePositions();
