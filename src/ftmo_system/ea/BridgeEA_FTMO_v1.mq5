@@ -474,6 +474,21 @@ void LogExecution(string sym, string action, string outcome,
     FileClose(fh);
 }
 
+// Check if a position from this source already exists on this symbol
+bool SourcePositionExists(string sym, string source)
+{
+    string comment_tag = "FTMO_AI_" + source;
+    for(int i = 0; i < PositionsTotal(); i++)
+    {
+        ulong ticket = PositionGetTicket(i);
+        if(ticket == 0) continue;
+        if(PositionGetString(POSITION_SYMBOL) != sym) continue;
+        if(StringFind(PositionGetString(POSITION_COMMENT), comment_tag) >= 0)
+            return true;
+    }
+    return false;
+}
+
 // Execute trade with full attribution (trade_id + source)
 void ExecuteTradeWithId(string sym, string action, double confidence,
                         double sl_price, double tp_price, double lot,
@@ -481,6 +496,13 @@ void ExecuteTradeWithId(string sym, string action, double confidence,
 {
     if(!EnableTrading) return;
     if(CheckFTMOLimits()) return;
+
+    // Block re-entry: one open position per (symbol, source) at a time
+    if(SourcePositionExists(sym, source))
+    {
+        if(LogVerbose) Print("[SKIP] ",sym," src=",source," already has open position");
+        return;
+    }
 
     // Enforce minimum lot size for this symbol
     double min_lot  = SymbolInfoDouble(sym, SYMBOL_VOLUME_MIN);
