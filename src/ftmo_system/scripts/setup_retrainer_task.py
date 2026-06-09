@@ -28,32 +28,16 @@ SCRIPT_PATH = str(Path(__file__).parent.parent / "training" / "daily_retrainer.p
 PYTHON_PATH = sys.executable
 LOG_DIR     = str(Path(__file__).parent.parent / "logs")
 
-# ── Time to run (UTC).  Task Scheduler uses LOCAL time, so we offset below.
-# Change this if your machine's UTC offset differs.
-RUN_TIME_UTC = "00:00"   # midnight UTC  →  adjust to local time in XML below
-
-
-def _local_time_for_utc(utc_hhmm: str) -> str:
-    """
-    Return the local clock time that corresponds to utc_hhmm.
-    Uses the machine's current UTC offset (no DST correction).
-    """
-    import datetime
-    h, m  = map(int, utc_hhmm.split(":"))
-    utc_t = datetime.datetime.now(datetime.timezone.utc).replace(
-        hour=h, minute=m, second=0, microsecond=0
-    )
-    local_t = utc_t.astimezone()
-    return local_t.strftime("%H:%M")
+# ── Schedule: every Sunday at 08:00 local time ───────────────────────────
+RUN_TIME_LOCAL = "08:00"
+RUN_DAY        = "Sunday"
 
 
 def create_task():
-    local_time = _local_time_for_utc(RUN_TIME_UTC)
     print(f"Creating Task Scheduler task : {TASK_NAME}")
     print(f"Script                       : {SCRIPT_PATH}")
     print(f"Python                       : {PYTHON_PATH}")
-    print(f"Run time (UTC)               : {RUN_TIME_UTC}")
-    print(f"Run time (local clock)       : {local_time}")
+    print(f"Schedule                     : Every {RUN_DAY} at {RUN_TIME_LOCAL}")
     print()
 
     os.makedirs(LOG_DIR, exist_ok=True)
@@ -65,16 +49,19 @@ def create_task():
     task_xml = f"""<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
-    <Description>FTMO AI Trading — daily model retraining (XGBoost + LightGBM + CatBoost + Transformer). Pushes updated models to GitHub on completion.</Description>
+    <Description>FTMO AI Trading — weekly model retraining (XGBoost + LightGBM + CatBoost + Transformer). Runs every Sunday at 08:00. Pushes updated models to GitHub on completion.</Description>
     <Author>FTMO_System</Author>
   </RegistrationInfo>
   <Triggers>
     <CalendarTrigger>
-      <StartBoundary>2026-01-01T{local_time}:00</StartBoundary>
+      <StartBoundary>2026-01-04T{RUN_TIME_LOCAL}:00</StartBoundary>
       <Enabled>true</Enabled>
-      <ScheduleByDay>
-        <DaysInterval>1</DaysInterval>
-      </ScheduleByDay>
+      <ScheduleByWeek>
+        <WeeksInterval>1</WeeksInterval>
+        <DaysOfWeek>
+          <{RUN_DAY}/>
+        </DaysOfWeek>
+      </ScheduleByWeek>
     </CalendarTrigger>
   </Triggers>
   <Settings>
@@ -119,7 +106,7 @@ def create_task():
     if result.returncode == 0:
         print(f"✓ Task '{TASK_NAME}' created successfully.")
         print()
-        print("The retrainer will run every day at midnight UTC.")
+        print(f"The retrainer will run every {RUN_DAY} at {RUN_TIME_LOCAL}.")
         print("It trains all 4 model types and auto-pushes updated models to GitHub.")
         print()
         print("To run immediately for testing:")
