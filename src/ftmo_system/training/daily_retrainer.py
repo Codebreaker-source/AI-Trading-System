@@ -38,7 +38,6 @@ from sklearn.model_selection import train_test_split
 BASE_DIR = Path(__file__).parent.parent
 sys.path.insert(0, str(BASE_DIR))
 
-from core.feature_expander import expand_features          # noqa: E402
 from training.data_labeler import (                        # noqa: E402
     label_dataframe, LABEL_SELL, LABEL_HOLD, LABEL_BUY,
 )
@@ -82,22 +81,12 @@ def load_execution_log(trades_csv: str) -> pd.DataFrame:
 
 
 def extract_feature_matrix(df: pd.DataFrame) -> np.ndarray | None:
-    """Build (N, 105) float32 matrix from a DataFrame with 27-feature columns."""
+    """Return raw (N, 27) float32 matrix — no expansion needed, models train on 27 CLEAN features."""
     missing = [f for f in FEATURE_27 if f not in df.columns]
     if missing:
         logger.warning(f"Feature columns missing: {missing[:5]}...")
         return None
-    raw = df[FEATURE_27].values.astype(np.float32)
-    rows = []
-    for row in raw:
-        feat_dict = dict(zip(FEATURE_27, row))
-        try:
-            expanded = expand_features(feat_dict)
-            rows.append(list(expanded.values()))
-        except Exception as e:
-            logger.debug(f"Feature expansion failed: {e}")
-            rows.append([np.nan] * 105)
-    return np.array(rows, dtype=np.float32)
+    return df[FEATURE_27].values.astype(np.float32)
 
 
 # ══════════════════════════════════════════════════════════════════════════
