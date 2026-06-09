@@ -12,7 +12,7 @@ Usage:
     bridge = AzureBridge()          # reads AZURE_STORAGE_CONNECTION_STRING
     bridge.upload_features("EURUSD.sim", "/path/to/EURUSD.sim_features.csv")
     preds = bridge.get_all_predictions(["EURUSD.sim", "GBPUSD.sim"])
-    # preds = { "EURUSD.sim": { "lgbm": {...}, "catboost": {...} } }
+    # preds = { "EURUSD.sim": { "lgbm": {...}, "catboost": {...}, "transformer": {...} } }
 """
 
 import os
@@ -155,7 +155,7 @@ class AzureBridge:
         results: Dict[str, Dict[str, dict]] = {}
         for sym in symbols:
             sym_preds = {}
-            for src in ["lgbm", "catboost"]:
+            for src in ["lgbm", "catboost", "transformer"]:
                 pred = self.get_prediction(sym, src)
                 if pred and pred.get("action") in ("BUY", "SELL"):
                     sym_preds[src] = pred

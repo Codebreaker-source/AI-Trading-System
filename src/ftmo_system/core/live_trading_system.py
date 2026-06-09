@@ -1939,7 +1939,7 @@ class LiveTradingSystemV5:
         if strategy_signal_count:
             self.log_system(f"[STRATEGIES] {strategy_signal_count} strategy signals fired")
 
-        # ── Colab cloud inference signals (lgbm + catboost) ──────────────
+        # ── Colab cloud inference signals (lgbm + catboost + transformer) ──
         # Download fresh predictions uploaded by Google Colab every 30 seconds.
         # Each model is an independent signal source going through the same
         # 15-min cooldown and signal file pipeline as all other sources.
@@ -1951,7 +1951,7 @@ class LiveTradingSystemV5:
                     features = features_dict.get(symbol, np.zeros(27))
                     atr = float(features[16]) if len(features) > 16 else 0.001
                     for src_name, pred in src_preds.items():
-                        # src_name is 'lgbm' or 'catboost'
+                        # src_name is 'lgbm', 'catboost', or 'transformer'
                         source   = f"colab_{src_name}"
                         action   = pred.get("action", "HOLD")
                         conf     = float(pred.get("confidence", 0.0))
