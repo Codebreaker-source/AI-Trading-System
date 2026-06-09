@@ -39,7 +39,7 @@ log = logging.getLogger(__name__)
 # Format: https://colab.research.google.com/drive/YOUR_NOTEBOOK_ID
 COLAB_NOTEBOOK_URL = os.environ.get(
     "COLAB_NOTEBOOK_URL",
-    "PASTE_YOUR_COLAB_URL_HERE"
+    "https://colab.research.google.com/github/Codebreaker-source/AI-Trading-System/blob/main/src/ftmo_system/colab/trading_inference.ipynb"
 )
 
 # Path to your Chrome user data directory (keeps Google login alive)
