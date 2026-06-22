@@ -1,21 +1,31 @@
 """
-Daily retraining — all 4 model types.
+Daily retraining — all 4 model types, PER SYMBOL, price-action labels.
 Run once per day (Task Scheduler, 00:00 UTC).
 
-For each symbol with ≥ MIN_TRADES executions:
-  1. Label trades with 3-tier profit-aware scheme (TP/TRAIL/SL + sample_weight)
-  2. Expand 27 → 105 features
-  3. Retrain XGBoost, LightGBM, CatBoost, SimpleTransformer
-  4. Only replace a model if new val_acc ≥ existing val_acc
-  5. After all symbols: git commit + push updated models to GitHub
+Reads data/training_sets/{SYMBOL}_tabular.parquet (produced by
+training/build_training_sets.py from PRICE ACTION in
+data/feature_history/{SYMBOL}.csv — forward 24-candle / 20-pip labeling,
+identical methodology to the original 8 pretrained models). Labels are
+never derived from any signal source's trade outcomes.
+
+For each symbol with >= MIN_TRADES rows:
+  1. Use the 27 raw features + label/weight from build_training_sets.py
+  2. Retrain XGBoost, LightGBM, CatBoost, SimpleTransformer — each
+     INDEPENDENTLY on the SAME per-symbol price-action label set.
+     Diversification comes from differing model architectures, not
+     differing label sources.
+  3. Only replace a model if new val_acc >= existing val_acc
+  4. After all symbols: git commit + push updated models to GitHub
      so Colab picks them up on next session start.
 
-Model save paths
-----------------
-  XGBoost     → FTMO_System/data/models/{SYM}_xgboost_CLEAN27.joblib   (local)
+Model save paths (flat, matching the original 8 pretrained models)
+--------------------------------------------------------------------
+  XGBoost     → FTMO_System/data/models/{SYM}_xgboost.joblib       (local)
   LightGBM    → GITHUB_MODELS_DIR/{SYM}_lightgbm.joblib
   CatBoost    → GITHUB_MODELS_DIR/{SYM}_catboost.joblib
   Transformer → GITHUB_MODELS_DIR/transformer/{SYM}_transformer.pth
+
+Rule-based strategies are never retrained and never contribute data here.
 """
 
 from __future__ import annotations
@@ -38,9 +48,7 @@ from sklearn.model_selection import train_test_split
 BASE_DIR = Path(__file__).parent.parent
 sys.path.insert(0, str(BASE_DIR))
 
-from training.data_labeler import (                        # noqa: E402
-    label_dataframe, LABEL_SELL, LABEL_HOLD, LABEL_BUY,
-)
+from core.feature_history_recorder import FEATURE_27  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -50,43 +58,42 @@ _DEFAULT_GITHUB_MODELS = (
     r"C:\Users\mt5-admin\Documents\GitHub\AI-Trading-System\models\current"
 )
 
-# ── Required execution-log columns ───────────────────────────────────────
-REQUIRED_TRADE_COLS = ["symbol", "direction", "outcome", "entry_time", "exit_time"]
-
-FEATURE_27 = [
-    "close", "high", "low", "volume",
-    "sma_20", "sma_50", "fast_ema", "slow_ema",
-    "htf_fast_ema", "htf_slow_ema", "htf_trend_direction", "htf_trend_alignment",
-    "rsi", "stoch_k", "stoch_d", "momentum",
-    "atr", "bb_upper", "bb_middle", "bb_lower", "volatility",
-    "volume_sma", "volume_ratio", "price_volume",
-    "bullish_sentiment", "bearish_sentiment", "net_sentiment",
-]
-
 
 # ══════════════════════════════════════════════════════════════════════════
 # Data helpers
 # ══════════════════════════════════════════════════════════════════════════
 
-def load_execution_log(trades_csv: str) -> pd.DataFrame:
-    if not os.path.exists(trades_csv):
-        logger.warning(f"Execution log not found: {trades_csv}")
-        return pd.DataFrame()
-    df = pd.read_csv(trades_csv)
-    missing = [c for c in REQUIRED_TRADE_COLS if c not in df.columns]
-    if missing:
-        logger.error(f"Execution log missing columns: {missing}")
-        return pd.DataFrame()
-    return df
+def load_training_sets(training_sets_dir: Path) -> dict[str, pd.DataFrame]:
+    """
+    Load every data/training_sets/{symbol}_tabular.parquet.
+    Returns {symbol: DataFrame}.
+    """
+    result = {}
+    if not training_sets_dir.exists():
+        logger.warning(f"Training sets dir not found: {training_sets_dir}")
+        return result
+
+    for parquet_path in training_sets_dir.glob("*_tabular.parquet"):
+        symbol = parquet_path.stem[: -len("_tabular")]
+        try:
+            df = pd.read_parquet(parquet_path)
+        except Exception as e:
+            logger.error(f"Failed to read {parquet_path}: {e}")
+            continue
+        if not df.empty:
+            result[symbol] = df
+
+    return result
 
 
 def extract_feature_matrix(df: pd.DataFrame) -> np.ndarray | None:
-    """Return raw (N, 27) float32 matrix — no expansion needed, models train on 27 CLEAN features."""
-    missing = [f for f in FEATURE_27 if f not in df.columns]
+    """Return (N, 27) float32 matrix from the feat_* columns written by build_training_sets.py."""
+    cols = [f"feat_{f}" for f in FEATURE_27]
+    missing = [c for c in cols if c not in df.columns]
     if missing:
         logger.warning(f"Feature columns missing: {missing[:5]}...")
         return None
-    return df[FEATURE_27].values.astype(np.float32)
+    return df[cols].values.astype(np.float32)
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -116,7 +123,7 @@ def _val_acc_of_saved(model_path: str, X, y, holdout_pct: float,
             class _T(nn.Module):
                 def __init__(self):
                     super().__init__()
-                    self.embedding  = nn.Linear(105, 64)
+                    self.embedding  = nn.Linear(len(FEATURE_27), 64)
                     enc = nn.TransformerEncoderLayer(d_model=64, nhead=4,
                                                      dim_feedforward=128,
                                                      dropout=0.1, batch_first=True)
@@ -214,7 +221,7 @@ def train_catboost(X, y, w, holdout_pct=0.2):
 class SimpleTransformer:
     """Thin wrapper around the PyTorch SimpleTransformer for train/eval."""
 
-    def __init__(self, input_dim=105, d_model=64, nhead=4,
+    def __init__(self, input_dim=len(FEATURE_27), d_model=64, nhead=4,
                  num_layers=2, num_classes=3, dropout=0.1):
         import torch.nn as nn
         from torch.nn import TransformerEncoderLayer, TransformerEncoder
@@ -299,27 +306,24 @@ def train_transformer(X, y, w, holdout_pct=0.2):
 # Per-symbol retraining
 # ══════════════════════════════════════════════════════════════════════════
 
-def retrain_symbol(symbol: str, symbol_df: pd.DataFrame,
+def retrain_symbol(symbol: str, df: pd.DataFrame,
                    local_model_dir: str, github_models_dir: str,
                    min_trades: int = 50, holdout_pct: float = 0.2) -> dict:
 
     result = {"symbol": symbol, "updated": [], "kept": [], "skipped": [], "errors": []}
 
-    if len(symbol_df) < min_trades:
-        logger.info(f"{symbol}: {len(symbol_df)} trades < {min_trades} minimum — skipping all")
+    if len(df) < min_trades:
+        logger.info(f"{symbol}: {len(df)} rows < {min_trades} minimum — skipping all")
         result["skipped"] = ["xgboost", "lightgbm", "catboost", "transformer"]
         return result
-
-    df = symbol_df.copy()
-    df["label"], df["weight"] = label_dataframe(df)
 
     X = extract_feature_matrix(df)
     if X is None:
         result["errors"].append("no_features")
         return result
 
-    y = df["label"].values
-    w = df["weight"].values
+    y = df["label"].values.astype(int)
+    w = df["weight"].values.astype(float)
 
     valid = ~np.isnan(X).any(axis=1)
     X, y, w = X[valid], y[valid], w[valid]
@@ -348,10 +352,10 @@ def retrain_symbol(symbol: str, symbol_df: pd.DataFrame,
             break
 
     tasks = [
-        ("xgboost",     train_xgboost,     os.path.join(local_model_dir,   f"{sym_clean}_xgboost_CLEAN27.joblib"), "sklearn"),
-        ("lightgbm",    train_lightgbm,    os.path.join(github_models_dir, f"{sym_clean}_lightgbm.joblib"),        "sklearn"),
-        ("catboost",    train_catboost,    os.path.join(github_models_dir, f"{sym_clean}_catboost.joblib"),        "sklearn"),
-        ("transformer", train_transformer, os.path.join(gh_trf_dir,        f"{sym_clean}_transformer.pth"),        "transformer"),
+        ("xgboost",     train_xgboost,     os.path.join(local_model_dir,   f"{sym_clean}_xgboost.joblib"),   "sklearn"),
+        ("lightgbm",    train_lightgbm,    os.path.join(github_models_dir, f"{sym_clean}_lightgbm.joblib"),  "sklearn"),
+        ("catboost",    train_catboost,    os.path.join(github_models_dir, f"{sym_clean}_catboost.joblib"),  "sklearn"),
+        ("transformer", train_transformer, os.path.join(gh_trf_dir,        f"{sym_clean}_transformer.pth"),  "transformer"),
     ]
 
     for name, trainer, model_path, mtype in tasks:
@@ -449,25 +453,34 @@ def run_daily_retraining(config: dict | None = None) -> list[dict]:
     ml_cfg       = config.get("ml", {})
     paths_cfg    = config.get("paths", {})
 
-    trades_csv         = r"C:\Users\mt5-admin\AppData\Roaming\MetaQuotes\Terminal\Common\Files\trades.csv"
+    training_sets_dir = BASE_DIR / "data" / "training_sets"
     local_model_dir    = str(BASE_DIR / ml_cfg.get("model_dir", "data/models"))
     github_models_dir  = paths_cfg.get("github_models_dir", _DEFAULT_GITHUB_MODELS)
     min_trades         = trading_cfg.get("min_trades_for_retrain", 50)
     holdout_pct        = retrain_cfg.get("holdout_pct", 0.2)
 
     logger.info(f"=== Daily Retraining started {datetime.now(timezone.utc).isoformat()} ===")
+    logger.info(f"Training sets : {training_sets_dir}")
     logger.info(f"Local models  : {local_model_dir}")
     logger.info(f"GitHub models : {github_models_dir}")
 
-    df = load_execution_log(trades_csv)
-    if df.empty:
-        logger.info("No execution data — retraining skipped")
+    # Build/refresh per-symbol price-action training sets from feature_history
+    try:
+        from training.build_training_sets import build_training_sets
+        build_summary = build_training_sets()
+        logger.info(f"Training sets built: {len(build_summary)} symbol(s)")
+    except Exception as e:
+        logger.error(f"build_training_sets failed: {e}", exc_info=True)
+
+    training_sets = load_training_sets(training_sets_dir)
+    if not training_sets:
+        logger.info("No training sets available — retraining skipped")
         return []
 
     results          = []
     symbols_updated  = []
 
-    for symbol, group in df.groupby("symbol"):
+    for symbol, group in training_sets.items():
         try:
             r = retrain_symbol(symbol, group, local_model_dir,
                                github_models_dir, min_trades, holdout_pct)

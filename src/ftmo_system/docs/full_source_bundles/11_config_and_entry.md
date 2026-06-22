@@ -1,3 +1,11 @@
+# Source Bundle: docs/full_source_bundles/11_config_and_entry.md
+
+
+---
+
+## `run_system.py`
+
+```py
 """
 FTMO AI Trading System - Entry Point
 =====================================
@@ -277,3 +285,121 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+```
+
+---
+
+## `config/ftmo_config.json`
+
+```json
+{
+  "mode": {
+    "simulation_mode": true
+  },
+  "account": {
+    "broker": "OANDA",
+    "server": "OANDA-Demo-1",
+    "login": 0,
+    "password": "",
+    "currency": "USD"
+  },
+  "risk": {
+    "max_daily_loss_pct": 5.0,
+    "max_total_loss_pct": 10.0,
+    "system_daily_loss_pct": 3.0,
+    "system_portfolio_risk_pct": 2.0,
+    "max_positions_per_corr_group": 2,
+    "signal_cooldown_minutes": 15,
+    "initial_lot_size": 0.01,
+    "max_lot_size": 0.05,
+    "risk_per_trade_pct": 0.5
+  },
+  "sessions": {
+    "filter_enabled": true,
+    "london_open": "07:00",
+    "london_close": "16:00",
+    "ny_open": "13:00",
+    "ny_close": "22:00",
+    "timezone": "UTC"
+  },
+  "symbols": {
+    "pretrained_bases": ["EURUSD", "GBPUSD", "USDJPY", "USDCHF", "AUDUSD", "USDCAD", "NZDUSD", "EURGBP"],
+    "suffix_strip_patterns": [".i", "_SB", ".r", "_raw"],
+    "min_volume": 0.0,
+    "exclude_patterns": ["#", "."]
+  },
+  "ml": {
+    "model_dir": "data/models",
+    "model_suffix": "_xgboost_CLEAN27.joblib",
+    "model_suffix_alt": "_xgboost.joblib",
+    "min_confidence": 0.45,
+    "label_encoding": {"HOLD": 0, "BUY": 1, "SELL": 2}
+  },
+  "trading": {
+    "timeframe_minutes": 15,
+    "feature_csv_dir": "data/features",
+    "execution_log": "data/execution_log/trades.csv",
+    "signal_dir": "data/features",
+    "loop_interval_seconds": 3,
+    "min_trades_for_retrain": 50
+  },
+  "retraining": {
+    "enabled": true,
+    "schedule_utc": "00:00",
+    "day_of_week": "sunday",
+    "holdout_pct": 0.2,
+    "min_accuracy_to_replace": 0.0
+  },
+  "confluence": {
+    "min_score_to_trade": 0.25,
+    "weights": {
+      "trend": 0.20,
+      "momentum": 0.15,
+      "candlestick": 0.15,
+      "level": 0.15,
+      "regime": 0.10,
+      "htf": 0.10,
+      "session": 0.10,
+      "news": 0.05
+    }
+  },
+  "danger": {
+    "max_danger_score": 13
+  }
+}
+
+```
+
+---
+
+## `.gitignore`
+
+```gitignore
+# Credentials
+config/ftmo_config.json
+
+# Runtime data
+data/features/
+data/execution_log/
+data/training_data/
+data/models/*.joblib
+
+# Logs
+logs/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv_lite/
+
+# Compiled EA
+ea/*.ex5
+
+# OS
+.DS_Store
+Thumbs.db
+
+```

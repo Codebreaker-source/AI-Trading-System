@@ -3,9 +3,10 @@ Windows Task Scheduler Setup — Colab Keepalive
 ================================================
 Run this script ONCE to register the keepalive task in Windows Task Scheduler.
 It will:
-  1. Run at 07:45 UTC daily (before London open)
-  2. Re-run every 4 hours during trading hours (07:45, 11:45, 15:45, 19:45 UTC)
-  3. Restart if the keepalive script itself crashes
+  1. Run every 5 minutes, all day (Colab free-tier sessions can disconnect
+     after as little as 10-15 min idle, so this catches a disconnect well
+     within that window)
+  2. Restart if the keepalive script itself crashes
 
 Usage:
   python scripts/setup_colab_task.py
@@ -25,15 +26,14 @@ LOG_DIR     = str(Path(__file__).parent.parent / "logs")
 
 os.makedirs(LOG_DIR, exist_ok=True)
 
-# Run times (UTC) — adjust if your timezone offsets change
-# 07:45, 11:45, 15:45, 19:45 UTC covers London open through NY close
-RUN_TIMES_UTC = ["07:45", "11:45", "15:45", "19:45"]
+# Repetition interval — re-run continuously throughout the day
+REPEAT_INTERVAL = "PT5M"
 
 def create_task():
     print(f"Creating Task Scheduler task: {TASK_NAME}")
-    print(f"Script:  {SCRIPT_PATH}")
-    print(f"Python:  {PYTHON_PATH}")
-    print(f"Times:   {', '.join(RUN_TIMES_UTC)} UTC")
+    print(f"Script:   {SCRIPT_PATH}")
+    print(f"Python:   {PYTHON_PATH}")
+    print(f"Interval: every 5 minutes")
     print()
 
     # Delete existing task if present
@@ -42,28 +42,21 @@ def create_task():
         capture_output=True
     )
 
-    # Build the XML task definition
-    # Using XML gives us full control over triggers, conditions, and settings
-    triggers_xml = "\n".join([
-        f"""
-        <CalendarTrigger>
-          <StartBoundary>2026-01-01T{t}:00</StartBoundary>
-          <Enabled>true</Enabled>
-          <ScheduleByDay>
-            <DaysInterval>1</DaysInterval>
-          </ScheduleByDay>
-        </CalendarTrigger>""".strip()
-        for t in RUN_TIMES_UTC
-    ])
-
     task_xml = f"""<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
-    <Description>FTMO AI Trading — Colab keepalive. Checks and restarts Google Colab inference session.</Description>
+    <Description>FTMO AI Trading — Colab keepalive. Checks and restarts Google Colab inference session every 5 minutes.</Description>
     <Author>FTMO_System</Author>
   </RegistrationInfo>
   <Triggers>
-    {triggers_xml}
+    <TimeTrigger>
+      <StartBoundary>2026-01-01T00:00:00</StartBoundary>
+      <Enabled>true</Enabled>
+      <Repetition>
+        <Interval>{REPEAT_INTERVAL}</Interval>
+        <StopAtDurationEnd>false</StopAtDurationEnd>
+      </Repetition>
+    </TimeTrigger>
   </Triggers>
   <Settings>
     <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
@@ -103,16 +96,16 @@ def create_task():
     os.remove(xml_path)
 
     if result.returncode == 0:
-        print(f"✓ Task '{TASK_NAME}' created successfully.")
+        print(f"[OK] Task '{TASK_NAME}' created successfully.")
         print()
         print("Next steps:")
-        print("  1. Upload colab/trading_inference.ipynb to Google Drive")
-        print("  2. Open it in Google Colab and copy the notebook URL")
-        print("  3. Set COLAB_NOTEBOOK_URL in colab/keepalive.py (or as env var)")
-        print("  4. Run 'pip install playwright && playwright install chromium'")
-        print("  5. Test manually: python colab/keepalive.py")
+        print("  1. Confirm COLAB_NOTEBOOK_URL in colab/keepalive.py points to your notebook")
+        print("  2. First run requires a one-time manual Google login:")
+        print("       python colab/keepalive.py")
+        print("     An Edge window will open in a dedicated automation profile —")
+        print("     log into the Google account that owns the Colab notebook, then close it.")
     else:
-        print(f"✗ Task creation failed:\n{result.stderr}")
+        print(f"[FAIL] Task creation failed:\n{result.stderr}")
         print("Try running this script as Administrator.")
         sys.exit(1)
 

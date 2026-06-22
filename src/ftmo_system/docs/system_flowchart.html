@@ -1,0 +1,877 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>FTMO AI Trading System — Visual Flowchart</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: #0d1117;
+  color: #e6edf3;
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  padding: 40px 20px 80px;
+}
+
+h1 {
+  text-align: center;
+  font-size: 20px;
+  font-weight: 700;
+  color: #58a6ff;
+  margin-bottom: 4px;
+  letter-spacing: 0.5px;
+}
+.subtitle {
+  text-align: center;
+  font-size: 12px;
+  color: #6e7681;
+  margin-bottom: 48px;
+}
+
+/* ─── Main column ─── */
+.chart {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0;
+}
+
+/* ─── Layer node ─── */
+.node {
+  border-radius: 12px;
+  padding: 18px 22px;
+  position: relative;
+  width: 700px;
+}
+.node-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.node-icon {
+  width: 36px; height: 36px;
+  border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 18px;
+  flex-shrink: 0;
+}
+.node-tag {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  opacity: 0.65;
+  display: block;
+  margin-bottom: 2px;
+}
+.node-title {
+  font-size: 15px;
+  font-weight: 700;
+}
+.node-body {
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: #c9d1d9;
+}
+.node-body b { color: #e6edf3; }
+
+/* colour variants */
+.node-blue   { background: #131d2e; border: 1.5px solid #388bfd; }
+.node-green  { background: #12261e; border: 1.5px solid #3fb950; }
+.node-purple { background: #1d1530; border: 1.5px solid #d2a8ff; }
+.node-orange { background: #261c0f; border: 1.5px solid #f0883e; }
+.node-teal   { background: #0f2129; border: 1.5px solid #39c5cf; }
+.node-red    { background: #2a0e0e; border: 1.5px solid #f85149; }
+.node-yellow { background: #251e0a; border: 1.5px solid #e3b341; }
+
+.icon-blue   { background: #1c3055; color: #58a6ff; }
+.icon-green  { background: #17381f; color: #3fb950; }
+.icon-purple { background: #2d1d52; color: #d2a8ff; }
+.icon-orange { background: #3d2510; color: #f0883e; }
+.icon-teal   { background: #0f2d36; color: #39c5cf; }
+.icon-red    { background: #3d1010; color: #f85149; }
+.icon-yellow { background: #332910; color: #e3b341; }
+
+/* ─── Arrow ─── */
+.arrow-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin: 2px 0;
+}
+.arrow-stem {
+  width: 2px;
+  background: linear-gradient(to bottom, #388bfd44, #3fb95044);
+  height: 32px;
+}
+.arrow-tip {
+  width: 0; height: 0;
+  border-left: 7px solid transparent;
+  border-right: 7px solid transparent;
+  border-top: 10px solid #3fb95044;
+}
+.arrow-note {
+  font-size: 10px;
+  color: #6e7681;
+  font-style: italic;
+  margin-top: 3px;
+  letter-spacing: 0.3px;
+}
+
+/* ─── Tag pills ─── */
+.pill {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 600;
+  border-radius: 20px;
+  padding: 2px 9px;
+  margin: 2px 3px 2px 0;
+}
+.pill-blue   { background: #1c3055; color: #79c0ff; }
+.pill-green  { background: #17381f; color: #56d364; }
+.pill-orange { background: #3d2510; color: #ffa657; }
+.pill-purple { background: #2d1d52; color: #d2a8ff; }
+.pill-red    { background: #3d1010; color: #f85149; }
+.pill-yellow { background: #332910; color: #e3b341; }
+.pill-teal   { background: #0f2d36; color: #39c5cf; }
+
+/* ─── 6-Phase gate ─── */
+.gate-wrap {
+  width: 700px;
+  background: #0b1117;
+  border: 2px solid #e3b34155;
+  border-radius: 14px;
+  padding: 20px 22px;
+}
+.gate-title {
+  text-align: center;
+  font-size: 13px;
+  font-weight: 700;
+  color: #e3b341;
+  margin-bottom: 16px;
+  letter-spacing: 0.5px;
+}
+
+.phases {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0;
+}
+
+.phase-box {
+  display: flex;
+  align-items: stretch;
+  width: 100%;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1.5px solid #21262d;
+}
+.phase-num-col {
+  width: 44px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  flex-shrink: 0;
+  padding: 12px 4px;
+}
+.phase-content {
+  flex: 1;
+  padding: 12px 14px;
+}
+.phase-name {
+  font-size: 13px;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+.phase-desc {
+  font-size: 11.5px;
+  color: #c9d1d9;
+  line-height: 1.65;
+}
+.phase-result {
+  margin-top: 6px;
+  font-size: 11px;
+}
+
+/* phase colours */
+.ph1 { background: #141c2a; border-color: #388bfd55; }
+.ph1 .phase-num-col { background: #1c3055; color: #79c0ff; }
+.ph2 { background: #1a1525; border-color: #d2a8ff55; }
+.ph2 .phase-num-col { background: #2d1d52; color: #d2a8ff; }
+.ph3 { background: #13201a; border-color: #3fb95055; }
+.ph3 .phase-num-col { background: #17381f; color: #56d364; }
+.ph4 { background: #1f1a10; border-color: #f0883e55; }
+.ph4 .phase-num-col { background: #3d2510; color: #ffa657; }
+.ph5 { background: #1f1815; border-color: #f8514955; }
+.ph5 .phase-num-col { background: #3d1010; color: #f85149; }
+.ph6 { background: #141f20; border-color: #39c5cf55; }
+.ph6 .phase-num-col { background: #0f2d36; color: #39c5cf; }
+
+.phase-connector {
+  width: 2px;
+  height: 10px;
+  background: #21262d;
+  margin: 0 auto;
+}
+
+/* ─── Decision diamond ─── */
+.diamond-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin: 2px 0;
+}
+.diamond {
+  width: 160px;
+  height: 52px;
+  background: #1c2a1a;
+  border: 1.5px solid #3fb950;
+  transform: rotate(0deg);
+  border-radius: 6px;
+  clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.diamond-text {
+  font-size: 11px;
+  font-weight: 700;
+  color: #56d364;
+  text-align: center;
+  transform: none;
+}
+
+/* ─── Two-column split ─── */
+.split-wrap {
+  width: 700px;
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+}
+.split-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0;
+}
+.split-node {
+  width: 100%;
+  border-radius: 10px;
+  padding: 13px 15px;
+  font-size: 12px;
+}
+.split-header {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+.split-desc { font-size: 11.5px; color: #c9d1d9; line-height: 1.65; }
+
+/* ─── Sources grid ─── */
+.sources-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 10px;
+  margin-top: 12px;
+}
+.source-card {
+  background: #0d1117;
+  border: 1px solid #21262d;
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+.source-card-head {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+.source-card-item {
+  font-size: 11px;
+  color: #8b949e;
+  line-height: 1.8;
+}
+.source-card-item::before { content: "· "; }
+
+/* ─── Checklist ─── */
+.checklist { margin-top: 8px; }
+.check-item {
+  font-size: 12px;
+  color: #c9d1d9;
+  line-height: 1.8;
+  padding-left: 16px;
+  position: relative;
+}
+.check-item::before {
+  content: "▸";
+  position: absolute;
+  left: 0;
+  color: #3fb950;
+  font-size: 10px;
+  top: 2px;
+}
+
+/* ─── Risk row ─── */
+.risk-row {
+  display: flex;
+  gap: 12px;
+  width: 700px;
+}
+.risk-card {
+  flex: 1;
+  border-radius: 10px;
+  padding: 14px 15px;
+  background: #1f1212;
+  border: 1.5px solid #f8514955;
+}
+.risk-card-head {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: #f85149;
+  margin-bottom: 6px;
+}
+.risk-card-body { font-size: 11.5px; color: #c9d1d9; line-height: 1.7; }
+
+/* ─── Feedback loop ─── */
+.loop-badge {
+  width: 700px;
+  background: #1d1530;
+  border: 1.5px dashed #d2a8ff55;
+  border-radius: 10px;
+  padding: 13px 18px;
+  font-size: 12px;
+  color: #d2a8ff;
+  text-align: center;
+  line-height: 1.6;
+}
+
+.divider-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: #6e7681;
+  margin: 10px 0 6px;
+}
+</style>
+</head>
+<body>
+
+<h1>⚡ FTMO AI Trading System — End-to-End Flowchart</h1>
+<div class="subtitle">OANDA-Demo-1 · Account 1600140290 · 27 Symbols · 16 Signal Sources · M15 Timeframe</div>
+
+<div class="chart">
+
+<!-- ══════════════════════════════════════════
+     LAYER 1 — MT5 MARKET DATA
+════════════════════════════════════════════ -->
+<div class="node node-blue">
+  <div class="node-header">
+    <div class="node-icon icon-blue">📡</div>
+    <div>
+      <span class="node-tag">Layer 1 · Market Data Source</span>
+      <div class="node-title">MetaTrader 5 — OANDA Terminal</div>
+    </div>
+  </div>
+  <div class="node-body">
+    The OANDA MetaTrader 5 terminal connects to <b>OANDA-Demo-1</b> and provides live tick-by-tick price data for all symbols
+    currently loaded in the Market Watch window. No symbol list is hardcoded — the system works with whatever OANDA makes available.<br><br>
+    <b>27 active symbols</b> including: EURUSD.sim, GBPUSD.sim, USDJPY.sim, US500.sim, XAUUSD.sim, BTCUSD.sim and more.<br>
+    Each symbol exposes: bid/ask, OHLCV, spread, trade mode, minimum volume, stops level, and point value.
+  </div>
+</div>
+
+<div class="arrow-wrap">
+  <div class="arrow-stem" style="height:28px;"></div>
+  <div class="arrow-tip"></div>
+  <div class="arrow-note">Live tick data feeds into Bridge EA every 3 seconds</div>
+</div>
+
+<!-- ══════════════════════════════════════════
+     LAYER 2 — BRIDGE EA
+════════════════════════════════════════════ -->
+<div class="node node-green">
+  <div class="node-header">
+    <div class="node-icon icon-green">🌉</div>
+    <div>
+      <span class="node-tag">Layer 2 · MQL5 Bridge EA · Runs every 3 seconds</span>
+      <div class="node-title">BridgeEA_FTMO_v1.mq5 — Feature Writer &amp; Trade Executor</div>
+    </div>
+  </div>
+  <div class="node-body">
+    The Bridge EA is the critical link between MetaTrader 5 and the Python system. It does two jobs simultaneously:<br><br>
+
+    <b>JOB 1 — Write Features (Python ← MT5)</b><br>
+    Every 3 seconds it loops through all symbols in the Market Watch and calculates <b>27 CLEAN features</b> per symbol,
+    writing them to <code style="background:#0d1117;padding:1px 5px;border-radius:3px;">{SYMBOL}_features.csv</code>
+    in the MT5 Common\Files folder. Python reads these files to run predictions and strategies.<br><br>
+
+    The 27 features are grouped as:<br>
+    <span class="pill pill-blue">Price (4)</span> close, high, low, volume
+    <span class="pill pill-purple">Trend (8)</span> SMA20/50, fast/slow EMA, HTF EMAs, HTF direction/alignment
+    <span class="pill pill-orange">Momentum (4)</span> RSI, Stoch K/D, Momentum
+    <span class="pill pill-teal">Volatility (5)</span> ATR, BB upper/mid/lower, volatility
+    <span class="pill pill-green">Volume (3)</span> vol SMA, vol ratio, price×volume
+    <span class="pill pill-yellow">Sentiment (3)</span> bullish/bearish/net sentiment<br><br>
+
+    <b>JOB 2 — Execute Trades (Python → MT5)</b><br>
+    It scans Common\Files for any <code style="background:#0d1117;padding:1px 5px;border-radius:3px;">signal_{SYM}_{SOURCE}.txt</code>
+    files written by Python. For each signal found it parses the action (BUY/SELL), lot size, and trade ID, then validates
+    and places the order. SL &amp; TP are calculated <i>by the EA</i> from the live ATR — Python sends 0,0 to avoid wrong
+    pip values on non-forex instruments like US500 or BTCUSD.<br><br>
+
+    <b>Position management:</b> regime-adaptive trailing stops · partial TP at 2:1 R:R · break-even at 25% risk · progressive trail<br>
+    <b>Guard:</b> <code style="background:#0d1117;padding:1px 5px;border-radius:3px;">SourcePositionExists()</code> — one open position per (symbol, source) enforced at EA level
+  </div>
+</div>
+
+<div class="arrow-wrap">
+  <div class="arrow-stem" style="height:28px;"></div>
+  <div class="arrow-tip"></div>
+  <div class="arrow-note">27-feature CSV files written to MT5 Common\Files per symbol</div>
+</div>
+
+<!-- ══════════════════════════════════════════
+     LAYER 3 — PYTHON READS FEATURES
+════════════════════════════════════════════ -->
+<div class="node node-purple">
+  <div class="node-header">
+    <div class="node-icon icon-purple">🐍</div>
+    <div>
+      <span class="node-tag">Layer 3 · Python Orchestrator · M15 Candle Cycle</span>
+      <div class="node-title">live_trading_system.py — Feature Ingestion &amp; Expansion</div>
+    </div>
+  </div>
+  <div class="node-body">
+    The main Python process wakes up on each M15 candle close and reads the latest feature CSV for every active symbol
+    from the MT5 Common\Files path. This is a <b>one-way data pull</b> — Python never writes to MT5 directly, only
+    through signal files.<br><br>
+
+    <b>Feature expansion:</b> The raw 27 features are passed through <code style="background:#0d1117;padding:1px 5px;border-radius:3px;">feature_expander.py</code>
+    which derives 78 additional engineered features (ratios, crosses, normalised values, lagged indicators) producing a
+    <b>105-feature vector</b> — the exact format expected by the pretrained XGBoost models.<br><br>
+
+    The raw 27-feature array is also kept as-is and passed directly to the strategy runner (EA translations and rule-based
+    strategies don't need the full 105 features).
+  </div>
+</div>
+
+<div class="arrow-wrap">
+  <div class="arrow-stem" style="height:28px;"></div>
+  <div class="arrow-tip"></div>
+  <div class="arrow-note">27-feat raw → Strategy Runner &amp; 105-feat expanded → XGBoost</div>
+</div>
+
+<!-- ══════════════════════════════════════════
+     LAYER 4 — 16 SIGNAL SOURCES
+════════════════════════════════════════════ -->
+<div class="node node-orange">
+  <div class="node-header">
+    <div class="node-icon icon-orange">⚡</div>
+    <div>
+      <span class="node-tag">Layer 4 · Signal Generation · 16 Independent Sources</span>
+      <div class="node-title">Strategy Runner — Every Source Fires Independently on Every Symbol</div>
+    </div>
+  </div>
+  <div class="node-body">
+    Every M15 candle, all 16 signal sources are evaluated independently on every symbol. Each source generates its own
+    BUY/SELL/HOLD independently — they don't vote together here. Each fired signal then enters the 6-phase gate
+    separately and is logged with full attribution.<br>
+
+    <div class="sources-grid">
+      <div class="source-card">
+        <div class="source-card-head" style="color:#58a6ff;">XGBoost ML · 1 source</div>
+        <div class="source-card-item">EURUSD, GBPUSD, USDJPY, USDCHF</div>
+        <div class="source-card-item">AUDUSD, USDCAD, NZDUSD, EURGBP</div>
+        <div style="margin-top:6px;font-size:10.5px;color:#58a6ff;">Pretrained model → BUY/SELL/HOLD + confidence score</div>
+        <div style="margin-top:3px;font-size:10.5px;color:#6e7681;">All other symbols → ML dimension = ABSTAIN (not blocked)</div>
+      </div>
+      <div class="source-card">
+        <div class="source-card-head" style="color:#f0883e;">EA Translations · 6 sources</div>
+        <div class="source-card-item">sma_3crossover</div>
+        <div class="source-card-item">tema_barrington</div>
+        <div class="source-card-item">ama_scalper</div>
+        <div class="source-card-item">sma_price_cross</div>
+        <div class="source-card-item">dema_rsi_hf</div>
+        <div class="source-card-item">dema_supertrend</div>
+      </div>
+      <div class="source-card">
+        <div class="source-card-head" style="color:#79c0ff;">Rule-Based · 9 sources</div>
+        <div class="source-card-item">volume_breakout</div>
+        <div class="source-card-item">currency_str_divergence</div>
+        <div class="source-card-item">volatility_breakout</div>
+        <div class="source-card-item">trend_following</div>
+        <div class="source-card-item">mean_reversion</div>
+        <div class="source-card-item">volatility_contraction</div>
+        <div class="source-card-item">currency_correlation</div>
+        <div class="source-card-item">low_vol_momentum</div>
+        <div class="source-card-item">high_vol_reversal</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="arrow-wrap">
+  <div class="arrow-stem" style="height:28px;"></div>
+  <div class="arrow-tip"></div>
+  <div class="arrow-note">Each fired BUY/SELL signal enters the 6-phase gate independently</div>
+</div>
+
+<!-- ══════════════════════════════════════════
+     LAYER 5 — 6-PHASE GATE
+════════════════════════════════════════════ -->
+<div class="gate-wrap">
+  <div class="gate-title">🔒 Layer 5 — 6-Phase Decision Gate &nbsp;·&nbsp; Every signal must clear all 6 phases before an order is placed</div>
+  <div class="phases">
+
+    <!-- PHASE 1 -->
+    <div class="phase-box ph1">
+      <div class="phase-num-col">P1</div>
+      <div class="phase-content">
+        <div class="phase-name">Capital Check — Account Safety</div>
+        <div class="phase-desc">
+          Before anything else, the system checks whether the account is still within safe drawdown bounds.
+          It tracks equity in real-time against both FTMO's hard rules and the system's own conservative limits.
+          If either limit is breached, <b>all trading stops immediately</b> — this is the most important safety feature
+          on a prop firm account because breaching FTMO's limits means losing the funded account entirely.
+        </div>
+        <div class="phase-result">
+          <span class="pill pill-green">PASS</span> Equity &gt; 97% of day-start balance AND &gt; 90% total
+          &nbsp;·&nbsp;
+          <span class="pill pill-red">BLOCK</span> Daily loss ≥ 3% (system) or ≥ 5% (FTMO hard) or total drawdown ≥ 10%
+        </div>
+      </div>
+    </div>
+    <div class="phase-connector"></div>
+
+    <!-- PHASE 2 -->
+    <div class="phase-box ph2">
+      <div class="phase-num-col">P2</div>
+      <div class="phase-content">
+        <div class="phase-name">Dimension Check — 4 Independent Assessments</div>
+        <div class="phase-desc">
+          Four separate dimensions evaluate the current market condition and cast votes (AGREE / DISAGREE / ABSTAIN).<br><br>
+          <b>🔵 REGIME dimension</b> — Analyses the market regime (trending, ranging, volatile, low-vol). Blocks if regime
+          is hostile to the signal direction (e.g. mean-reversion signal in a strong trend).<br><br>
+          <b>🟣 SESSION dimension</b> — Only London (08:00–16:00 UTC) and New York (13:00–21:00 UTC) sessions are
+          allowed. Trades during Tokyo or dead sessions are blocked — liquidity is too low.<br><br>
+          <b>🔵 ML dimension</b> — XGBoost prediction for the 8 pretrained symbols. If the model disagrees with the
+          signal direction it votes DISAGREE. If there is <i>no model</i> for this symbol, it returns <b>ABSTAIN</b>
+          (not DISAGREE) — the symbol can still trade, it just needs stronger agreement from the other 3 dimensions.<br><br>
+          <b>🟠 CONFLUENCE dimension</b> — An 8-factor weighted score (0.0–1.0) combining: candlestick patterns,
+          support/resistance levels, HTF trend alignment, momentum, volume confirmation, BB position, RSI condition,
+          and news sentiment. Must score ≥ 0.25 to pass.
+        </div>
+        <div class="phase-result">
+          <span class="pill pill-green">PASS</span> All 4 dimensions evaluated, votes recorded
+          &nbsp;·&nbsp;
+          <span class="pill pill-yellow">NOTE</span> Symbols without ML: ML = ABSTAIN (3 active dimensions remain)
+        </div>
+      </div>
+    </div>
+    <div class="phase-connector"></div>
+
+    <!-- PHASE 3 -->
+    <div class="phase-box ph3">
+      <div class="phase-num-col">P3</div>
+      <div class="phase-content">
+        <div class="phase-name">Counter Vote — Minimum Agreement Required</div>
+        <div class="phase-desc">
+          The votes from Phase 2 are counted. The trade only proceeds if enough dimensions agree on the direction.<br><br>
+          <b>Symbols with ML model:</b> Need ≥ 3 out of 4 dimensions to AGREE. One DISAGREE is allowed.<br><br>
+          <b>Symbols without ML model:</b> The ML dimension is ABSTAIN, so 3 active dimensions remain.
+          All 3 must AGREE — there's no room for disagreement when the ML safety net is absent.<br><br>
+          <b>No hard vetoes</b> — no single dimension can unilaterally block a trade. The counter system means a
+          strong majority wins, preventing one noisy signal from shutting down an otherwise solid setup.
+        </div>
+        <div class="phase-result">
+          <span class="pill pill-green">PASS</span> ≥ 3 dimensions AGREE (with model) · All 3 AGREE (without model)
+          &nbsp;·&nbsp;
+          <span class="pill pill-red">BLOCK</span> Insufficient agreement
+        </div>
+      </div>
+    </div>
+    <div class="phase-connector"></div>
+
+    <!-- PHASE 4 -->
+    <div class="phase-box ph4">
+      <div class="phase-num-col">P4</div>
+      <div class="phase-content">
+        <div class="phase-name">Integration — Generate Final Signal</div>
+        <div class="phase-desc">
+          The outputs of all dimensions are combined into a single final signal with a direction (BUY/SELL) and
+          confidence score. This is where the XGBoost confidence, confluence score, and dimension votes are
+          weighted and merged.<br><br>
+          The system also applies the <b>HOLD-bias fix</b> for XGBoost: if the model predicts HOLD but one of
+          BUY or SELL has the second-highest probability, the strongest directional signal is used instead of
+          blindly following the HOLD prediction — because models trained with imbalanced data tend to over-predict HOLD.
+        </div>
+        <div class="phase-result">
+          <span class="pill pill-green">PASS</span> Final direction confirmed with composite confidence score
+          &nbsp;·&nbsp;
+          <span class="pill pill-red">BLOCK</span> Net confidence below threshold after integration
+        </div>
+      </div>
+    </div>
+    <div class="phase-connector"></div>
+
+    <!-- PHASE 5 -->
+    <div class="phase-box ph5">
+      <div class="phase-num-col">P5</div>
+      <div class="phase-content">
+        <div class="phase-name">Danger Scoring — 7-Category Risk Assessment (0–21 points)</div>
+        <div class="phase-desc">
+          An independent danger score is calculated across 7 categories. Each category can score 0–3 points.
+          A total score ≥ 13 blocks the trade — too many risk factors active simultaneously.<br><br>
+          <span class="pill pill-red">SPREAD</span> Is the current spread unusually wide (slippage risk)?<br>
+          <span class="pill pill-red">NEWS</span> High-impact economic news event within 30 minutes?<br>
+          <span class="pill pill-red">STREAK</span> Are we on a losing streak? (trade history tracker)<br>
+          <span class="pill pill-red">VOLATILITY</span> Is volatility spiking beyond normal ATR range?<br>
+          <span class="pill pill-red">CORRELATION</span> Are too many correlated pairs already open?<br>
+          <span class="pill pill-red">SESSION</span> Are we in a low-liquidity transition period?<br>
+          <span class="pill pill-red">REGIME</span> Is the regime unstable or rapidly changing?
+        </div>
+        <div class="phase-result">
+          <span class="pill pill-green">PASS</span> Danger score 0–12 · Manageable risk environment
+          &nbsp;·&nbsp;
+          <span class="pill pill-red">BLOCK</span> Danger score ≥ 13 · Too many risk factors active
+        </div>
+      </div>
+    </div>
+    <div class="phase-connector"></div>
+
+    <!-- PHASE 6 -->
+    <div class="phase-box ph6">
+      <div class="phase-num-col">P6</div>
+      <div class="phase-content">
+        <div class="phase-name">Anti-Fragile Entry — Probe First, Build Later</div>
+        <div class="phase-desc">
+          Rather than entering with a full position immediately, the system uses an anti-fragile sizing approach.
+          The first entry is always a <b>probe</b> — a minimal 0.01 lot order to test the water.<br><br>
+          As the trade moves in the expected direction and reaches predefined R-multiple levels (e.g. 1:1, 1.5:1),
+          the system adds to the position incrementally — building up to a maximum of 0.05 lots only when the
+          market has confirmed the direction. Losing probes are small and cheap; winning trades get built up.<br><br>
+          This means the system is <b>never risking full size on an unproven signal</b>. It earns the right to
+          size up by being correct first.
+        </div>
+        <div class="phase-result">
+          <span class="pill pill-teal">PROBE</span> 0.01 lot entry at signal price
+          &nbsp;·&nbsp;
+          <span class="pill pill-teal">BUILD</span> Add lots at R-levels as trade proves direction
+          &nbsp;·&nbsp;
+          <span class="pill pill-teal">MAX</span> 0.05 lot full position
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /phases -->
+</div><!-- /gate-wrap -->
+
+<div class="arrow-wrap">
+  <div class="arrow-stem" style="height:28px;"></div>
+  <div class="arrow-tip"></div>
+  <div class="arrow-note">Signal cleared all 6 phases → Python writes signal file</div>
+</div>
+
+<!-- ══════════════════════════════════════════
+     LAYER 6 — SIGNAL FILE COMMUNICATION
+════════════════════════════════════════════ -->
+<div class="node node-teal">
+  <div class="node-header">
+    <div class="node-icon icon-teal">📄</div>
+    <div>
+      <span class="node-tag">Layer 6 · File Bridge · MT5 Common\Files</span>
+      <div class="node-title">Signal File Communication — Python → EA</div>
+    </div>
+  </div>
+  <div class="node-body">
+    Python and the EA communicate through flat text files in the MT5 Common\Files folder — a shared directory
+    both processes can read and write. This is a deliberate design choice: it works regardless of how MT5
+    is launched, requires no sockets or network config, and is completely transparent (you can inspect any
+    signal file in Notepad).<br><br>
+
+    <b>File name format:</b> <code style="background:#0d1117;padding:1px 5px;border-radius:3px;">signal_{SYMBOL}_{SOURCE}.txt</code>
+    — e.g. <code style="background:#0d1117;padding:1px 5px;border-radius:3px;">signal_EURUSD.sim_dema_supertrend.txt</code><br>
+    <b>File contents (no header):</b> <code style="background:#0d1117;padding:1px 5px;border-radius:3px;">symbol, action, confidence, sl_price, tp_price, lot, trade_id, timestamp</code><br><br>
+
+    <b>sl_price = 0, tp_price = 0</b> — Python intentionally sends zeros. The EA calculates live SL/TP from the
+    current ATR, which correctly handles non-forex instruments (US500 point = 0.1, BTCUSD point = 0.01) without
+    Python needing to know each symbol's pip value.<br><br>
+
+    <b>Python-side 15-minute cooldown</b> per (symbol, source) — prevents Python from re-writing a signal file
+    for the same source before enough time has passed for market conditions to change meaningfully.
+  </div>
+</div>
+
+<div class="arrow-wrap">
+  <div class="arrow-stem" style="height:28px;"></div>
+  <div class="arrow-tip"></div>
+  <div class="arrow-note">EA reads signal files on next 3-second tick → validates and executes</div>
+</div>
+
+<!-- ══════════════════════════════════════════
+     LAYER 7 — EXECUTION
+════════════════════════════════════════════ -->
+<div class="node node-red">
+  <div class="node-header">
+    <div class="node-icon icon-red">💹</div>
+    <div>
+      <span class="node-tag">Layer 7 · Order Execution · EA-side validation</span>
+      <div class="node-title">Trade Execution — EA Order Placement</div>
+    </div>
+  </div>
+  <div class="node-body">
+    The EA applies its own layer of validation before placing any order, acting as a final safety net against
+    stale data, race conditions, or edge-case values from Python:<br><br>
+
+    <div class="checklist">
+      <div class="check-item"><b>SourcePositionExists()</b> — Checks if a position with comment <code style="background:#0d1117;padding:1px 4px;border-radius:3px;">"FTMO_AI_"+source</code> is already open on this symbol. If yes, skip — one position per (symbol, source) maximum.</div>
+      <div class="check-item"><b>Minimum lot enforcement</b> — Reads SYMBOL_VOLUME_MIN from MT5 per symbol (0.01 for forex, 0.1 for US500/US100, 0.01 for BTCUSD). Upgrades lot to minimum if needed.</div>
+      <div class="check-item"><b>ATR-based SL/TP calculation</b> — BUY: sl = ask − 2×ATR, tp = ask + 3×ATR. SELL: sl = bid + 2×ATR, tp = bid − 3×ATR. Validated against SYMBOL_TRADE_STOPS_LEVEL.</div>
+      <div class="check-item"><b>Price normalisation</b> — All prices normalised to the symbol's tick size before order submission to prevent "invalid stops" rejections.</div>
+      <div class="check-item"><b>Order comment</b> — Set to <code style="background:#0d1117;padding:1px 4px;border-radius:3px;">"FTMO_AI_" + source + "_" + trade_id</code> enabling full attribution in every position and deal record.</div>
+      <div class="check-item"><b>Fresh price fetch</b> — ask/bid fetched immediately before PositionModify (not reused from earlier in the tick) to prevent race conditions on trailing stop modifications.</div>
+    </div>
+  </div>
+</div>
+
+<div class="arrow-wrap">
+  <div class="arrow-stem" style="height:28px;"></div>
+  <div class="arrow-tip"></div>
+  <div class="arrow-note">Order confirmed → EA and Python both log the execution</div>
+</div>
+
+<!-- ══════════════════════════════════════════
+     LAYER 8 — LOGGING
+════════════════════════════════════════════ -->
+<div class="split-wrap">
+  <div class="split-col">
+    <div class="split-node node-blue" style="padding:16px;">
+      <div class="split-header" style="color:#58a6ff;">📋 EA Execution Log</div>
+      <div class="split-desc">
+        <b>File:</b> <code style="background:#0d1117;padding:1px 4px;border-radius:3px;">execution_log/trades.csv</code><br><br>
+        Written by the EA on every order fill. Contains: ticket number, symbol, action (BUY/SELL), lot size,
+        entry price, SL, TP, <b>trade_id</b>, <b>signal_source</b>, and timestamp.<br><br>
+        The <code style="background:#0d1117;padding:1px 4px;border-radius:3px;">trade_id</code> links every EA execution
+        back to the exact Python signal that triggered it, enabling cross-referencing between EA logs and Python logs.
+      </div>
+    </div>
+  </div>
+  <div class="split-col">
+    <div class="split-node node-teal" style="padding:16px;">
+      <div class="split-header" style="color:#39c5cf;">📊 Unified Trade Logger</div>
+      <div class="split-desc">
+        <b>File:</b> <code style="background:#0d1117;padding:1px 4px;border-radius:3px;">data/unified_trades.csv</code><br><br>
+        Written by Python for <i>every signal from every source</i> — including signals that were blocked by the
+        gate. Captures: trade_id, signal_source, source_type, action, confidence, confluence score, dimension
+        votes, danger score, key indicators (close, RSI, ATR, momentum, volatility), whether the gate passed,
+        whether execution was confirmed, and eventual outcome (TP/SL/manual, profit in pips and USD).<br><br>
+        This is the primary dataset for later analysis — which sources work on which symbols, which gate phase
+        blocks most trades, what conditions predict winners.
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="arrow-wrap">
+  <div class="arrow-stem" style="height:28px;"></div>
+  <div class="arrow-tip"></div>
+  <div class="arrow-note">Daily at 00:00 UTC — retrainer reads execution log</div>
+</div>
+
+<!-- ══════════════════════════════════════════
+     LAYER 9 — DAILY RETRAINER
+════════════════════════════════════════════ -->
+<div class="node node-purple">
+  <div class="node-header">
+    <div class="node-icon icon-purple">🔄</div>
+    <div>
+      <span class="node-tag">Layer 9 · Daily Retraining · Sunday 00:00 UTC</span>
+      <div class="node-title">daily_retrainer.py — XGBoost Auto-Creation from Execution Data</div>
+    </div>
+  </div>
+  <div class="node-body">
+    The retrainer is the system's self-improvement engine. As trades accumulate in the execution log,
+    it periodically creates or updates XGBoost models — meaning symbols that start on rule-based-only
+    automatically graduate to ML-enhanced trading once enough data exists.<br><br>
+
+    <b>Labelling logic:</b> Each closed trade is labelled based on outcome —
+    BUY hit TP → label BUY (correct) · BUY hit SL → label SELL (wrong direction) ·
+    SELL hit TP → label SELL (correct) · SELL hit SL → label BUY (wrong direction) ·
+    No trade taken → label HOLD. This teaches the model what market conditions actually predicted each direction.<br><br>
+
+    <b>Minimum 50 trades</b> per symbol before training — below this threshold there's not enough data for
+    a reliable model. The symbol stays on rule-based until the threshold is met.<br><br>
+
+    <b>Model replacement gate:</b> The new model is only saved if its accuracy on a held-out test set matches
+    or beats the previous model. A worse new model is discarded — the old one stays active. This prevents
+    overfitting to a short bad run from replacing a better long-run model.<br><br>
+
+    <b>Output:</b> <code style="background:#0d1117;padding:1px 5px;border-radius:3px;">data/models/{SYMBOL}_xgboost_CLEAN27.joblib</code>
+    — on next system startup, the symbol manager detects the new model and moves the symbol
+    from the rule-based path to the full ML + confluence + 6-phase path.
+  </div>
+</div>
+
+<div class="arrow-wrap">
+  <div class="arrow-stem" style="height:28px;background:linear-gradient(to bottom,#d2a8ff44,#388bfd44);"></div>
+  <div class="arrow-tip" style="border-top-color:#388bfd44;"></div>
+  <div class="arrow-note" style="color:#d2a8ff;">↑ New .joblib models feed back into Layer 4 — ML path expands as symbols accumulate 50+ trades ↑</div>
+</div>
+
+<div class="loop-badge">
+  ♻️ &nbsp;<b>Feedback Loop:</b>&nbsp; Execution data → Labels → New XGBoost models → More symbols on ML path → Better signals → More execution data
+</div>
+
+<!-- ══════════════════════════════════════════
+     RISK OVERLAY
+════════════════════════════════════════════ -->
+<div style="height:32px;"></div>
+<div class="divider-label">⚠️ Risk Management Overlay — Active at all times across all layers</div>
+
+<div class="risk-row">
+  <div class="risk-card">
+    <div class="risk-card-head">FTMO Hard Limits</div>
+    <div class="risk-card-body">
+      Daily loss ≥ <b>5%</b> → ALL trading halts<br>
+      Total drawdown ≥ <b>10%</b> → ALL trading halts<br>
+      System conservative daily cap: <b>3%</b><br>
+      System portfolio risk cap: <b>2%</b><br>
+      Breaching FTMO limits = losing the funded account
+    </div>
+  </div>
+  <div class="risk-card">
+    <div class="risk-card-head">Correlation Guard</div>
+    <div class="risk-card-body">
+      Max <b>2 positions</b> per correlated group<br>
+      (EUR pairs, USD pairs, commodity block)<br>
+      15-min cooldown per (symbol, source)<br>
+      Prevents over-exposure to one currency move
+    </div>
+  </div>
+  <div class="risk-card">
+    <div class="risk-card-head">Session Filter</div>
+    <div class="risk-card-body">
+      <b>London:</b> 08:00–16:00 UTC only<br>
+      <b>New York:</b> 13:00–21:00 UTC only<br>
+      Tokyo / off-hours = SESSION DISAGREE<br>
+      Overlap window (13:00–16:00) = highest liquidity
+    </div>
+  </div>
+</div>
+
+</div><!-- /chart -->
+</body>
+</html>

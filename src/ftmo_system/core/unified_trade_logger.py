@@ -36,6 +36,8 @@ COLUMNS = [
     "entry_price", "sl", "tp", "lot",
     # Outcome (filled when trade closes)
     "exit_time", "exit_price", "outcome", "profit_pips", "profit_usd",
+    # Outcome detail (filled by trade_outcome_simulator)
+    "exit_reason", "mfe_pips", "mae_pips", "trade_duration_minutes", "label_quality",
 ]
 
 
@@ -113,6 +115,8 @@ class UnifiedTradeLogger:
             "entry_price": "", "sl": "", "tp": "", "lot": "",
             "exit_time": "", "exit_price": "", "outcome": "",
             "profit_pips": "", "profit_usd": "",
+            "exit_reason": "", "mfe_pips": "", "mae_pips": "",
+            "trade_duration_minutes": "", "label_quality": "",
         }
         self._pending[trade_id] = row
         self._append_row(row)
@@ -147,17 +151,28 @@ class UnifiedTradeLogger:
         self,
         trade_id: str,
         exit_price: float,
-        outcome: str,       # 'TP' | 'SL' | 'MANUAL'
+        outcome: str,       # 'TP' | 'SL' | 'BE' | 'PARTIAL_TP' | 'MANUAL' | 'OPEN'
         profit_pips: float,
         profit_usd: float,
+        exit_reason: str = "",
+        mfe_pips: float = 0.0,
+        mae_pips: float = 0.0,
+        trade_duration_minutes: float = 0.0,
+        label_quality: str = "",   # 'tick' | 'm1_approx'
+        exit_time: Optional[datetime] = None,
     ):
-        """Fill outcome columns when trade closes."""
+        """Fill outcome columns when trade closes (or finalizes a label)."""
         self._update_row(trade_id, {
-            "exit_time":   datetime.now(timezone.utc).isoformat(),
+            "exit_time":   (exit_time or datetime.now(timezone.utc)).isoformat(),
             "exit_price":  round(exit_price, 6),
             "outcome":     outcome,
             "profit_pips": round(profit_pips, 1),
             "profit_usd":  round(profit_usd, 2),
+            "exit_reason": exit_reason,
+            "mfe_pips":    round(mfe_pips, 1),
+            "mae_pips":    round(mae_pips, 1),
+            "trade_duration_minutes": round(trade_duration_minutes, 1),
+            "label_quality": label_quality,
         })
 
     # ------------------------------------------------------------------

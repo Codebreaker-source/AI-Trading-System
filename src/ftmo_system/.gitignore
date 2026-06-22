@@ -23,3 +23,17 @@ ea/*.ex5
 # OS
 .DS_Store
 Thumbs.db
+
+# Cross-session handoff backups (keep only the live handoff)
+docs/*.backup-*
+docs/*.bak_*
+docs/*.backup
+
+# Local IDE / agent state
+.claude/
+
+# Training + sim runtime data (binaries / parquet)
+data/
+*.parquet
+models/current/*.joblib
+models/current/transformer/*.pth

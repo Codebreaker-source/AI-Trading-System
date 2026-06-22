@@ -1,3 +1,11 @@
+# Source Bundle: docs/full_source_bundles/01_live_trading_system.md
+
+
+---
+
+## `core/live_trading_system.py`
+
+```py
 """
 Live Trading System V5.0 - Tree-Based Ensemble Integration
 ==========================================================
@@ -1729,7 +1737,7 @@ class LiveTradingSystemV5:
                 return False
         return False
 
-    def write_trade_commands(self, signals: List[Dict], features_dict: Dict[str, Any] = None):
+    def write_trade_commands(self, signals: List[Dict]):
         """Write trade commands for Bridge EA"""
         if not signals:
             if self.last_signals:
@@ -1781,7 +1789,6 @@ class LiveTradingSystemV5:
             del self.last_signals[pair]
         
         if new_commands:
-            _fdict = features_dict or {}
             commands = []
             for signal in new_commands:
                 commands.append({
@@ -1791,16 +1798,7 @@ class LiveTradingSystemV5:
                     'sl_price': signal.get('sl_price', 0),
                     'tp_price': signal.get('tp_price', 0),
                     'lot_size': signal.get('lot_size', 0),  # v5.1: Quarter-level scaling lot size
-                    'timestamp': datetime.now().isoformat(),
-                    # Restore fields needed for unified logging (Option C fix)
-                    'features': list(_fdict.get(signal['pair'], [])),
-                    'trade_id': signal.get('trade_id', ''),
-                    'source': 'xgboost',
-                    'source_type': 'xgboost',
-                    'confluence_score': signal.get('confluence_score', 0.0),
-                    'dimension_count': signal.get('dimension_count', 0),
-                    'danger_score': signal.get('danger_score', 0.0),
-                    'strategy_votes': signal.get('strategy_votes', ''),
+                    'timestamp': datetime.now().isoformat()
                 })
             
             df = pd.DataFrame(commands)
@@ -2263,11 +2261,11 @@ class LiveTradingSystemV5:
                 )
 
             self.log_predictions(ml_results, filtered_results, signals)
-            self.write_trade_commands(signals, features_dict)
+            self.write_trade_commands(signals)
         else:
             self.log_system("   [HOLD] No signals after confluence filtering")
             self.log_predictions(ml_results, filtered_results, signals)
-            self.write_trade_commands([], features_dict)
+            self.write_trade_commands([])
 
         # ================================================================
         # STRATEGY ENGINE — 15 independent sources (6 EA + 9 rule-based)
@@ -2394,3 +2392,5 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+```

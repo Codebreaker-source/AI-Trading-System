@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FTMO_System — End-to-End Simulation Pipeline (v2)</title>
+<style>
+  :root{
+    --bg:#0f1115; --card:#181b22; --card2:#1f2430; --ink:#e7e9ee; --muted:#a6adbb;
+    --line:#2a2f3a; --accent:#4f9cf9; --accent2:#27c08a; --flag:#ffb454; --flagbg:#2a2113;
+    --gateA:#7c5cff; --pathB:#1f9e75; --danger:#ff6b6b;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+  .wrap{max-width:980px;margin:0 auto;padding:32px 20px 80px}
+  h1{font-size:26px;margin:0 0 6px}
+  .meta{color:var(--muted);font-size:13px;margin-bottom:4px}
+  .sup{color:var(--accent2);font-size:12px;margin-bottom:24px}
+  h2{font-size:18px;margin:30px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--line)}
+  h3{font-size:15px;margin:0 0 8px;color:var(--accent)}
+  .layer{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin:14px 0}
+  .layer .tag{display:inline-block;font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin-bottom:6px}
+  .flow{text-align:center;color:var(--muted);font-size:12.5px;margin:8px 0}
+  .flag{background:var(--flagbg);border-left:3px solid var(--flag);border-radius:6px;padding:8px 12px;margin:8px 0;font-size:13.5px}
+  .flag b{color:var(--flag)}
+  .corrections{background:var(--card2);border:1px solid var(--line);border-radius:12px;padding:14px 20px;margin:10px 0 8px}
+  .corrections ol{margin:6px 0 0;padding-left:20px}
+  .corrections li{margin:7px 0}
+  .two{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .pathA{border-top:3px solid var(--gateA)}
+  .pathB{border-top:3px solid var(--pathB)}
+  .phase{background:var(--card2);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin:8px 0}
+  .phase .pid{display:inline-block;background:var(--gateA);color:#fff;font-weight:600;border-radius:5px;padding:1px 7px;font-size:12px;margin-right:8px}
+  .verdict{font-size:12.5px;color:var(--muted);margin-top:6px}
+  table{width:100%;border-collapse:collapse;margin:8px 0;font-size:13.5px}
+  th,td{border:1px solid var(--line);padding:7px 9px;text-align:left;vertical-align:top}
+  th{background:var(--card2);color:var(--muted);font-weight:600}
+  ul{margin:6px 0;padding-left:20px}
+  li{margin:4px 0}
+  .cols{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .ok{color:var(--accent2)} .no{color:var(--danger)}
+  code{background:#11141a;border:1px solid var(--line);border-radius:4px;padding:1px 5px;font-size:12.5px}
+  .q{margin:6px 0}
+  @media(max-width:760px){.two,.cols{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>⚡ FTMO_System — End-to-End Simulation Pipeline (v2)</h1>
+  <div class="meta"><code>live_trading_system.py</code> orchestrator · <code>BridgeEA_FTMO_v1.mq5</code> · OANDA-Demo-1 (config currently blank/placeholder) · ~27 Market-Watch symbols · 3-second loop, M15-style 15-min per-source cooldown</div>
+  <div class="sup">Source-verified rebuild · supersedes system_flowchart.html (2026-06-09) · built from full_source_bundles read on 2026-06-11 · saved to disk 2026-06-14</div>
+
+  <div class="corrections">
+    <h3>📌 What this version corrects vs. the 2026-06-09 baseline (read first)</h3>
+    <ol>
+      <li><b>Two parallel execution paths, not one.</b> Only the XGBoost source runs through confluence + the 6-phase gate. The 15 strategy-runner sources and the 3 Colab cloud models bypass the gate completely — <code>_run_strategy_engine()</code> fires each one straight to a signal file with only a 15-min per-source cooldown. The old chart routed all sources through the gate.</li>
+      <li><b>The Colab cloud-ensemble path was missing entirely.</b> LightGBM + CatBoost + Transformer run on Google Colab, not locally; the local process only uploads features and downloads their prediction JSONs via Azure Blob.</li>
+      <li><b>Loop is every 3 seconds</b> (<code>update_interval=3</code>), not "on M15 candle close." M15 alignment is approximated by the 15-min cooldown.</li>
+      <li><b>XGBoost consumes 27 features, not 105.</b> The 27→105 expansion runs but the ML call slices back to the first 27 (<code>features[:27]</code>); the 105 vector is effectively vestigial for the ML path.</li>
+      <li><b>Label encoding is 0=SELL, 1=HOLD, 2=BUY</b> (confirmed in <code>ensemble_predictor.py</code>) — the inverse of the old CLAUDE.md note. Do not "fix."</li>
+      <li><b>Lot sizes, thresholds, sessions corrected from live code</b> (probe 0.05→target 0.15; confluence ≥0.35; SL/TP 1.5×/3.0× ATR; London 07:00–16:00 / NY 12:00–21:00 UTC). See nodes below.</li>
+    </ol>
+  </div>
+
+  <h2>📡 Layer 1 · Market Data Source — MetaTrader 5 (OANDA Terminal, OANDA-Demo-1)</h2>
+  <div class="layer">
+    <p>The MT5 terminal supplies live tick/OHLCV for every symbol in Market Watch. No symbol list is hardcoded — the EA discovers whatever the broker exposes via <code>SymbolsTotal(true)</code>, skipping disabled / "#" symbols.</p>
+    <div class="flag"><b>Account note:</b> <code>config/ftmo_config.json → account</code> is currently blank/placeholder (login 0, server "OANDA-Demo-1"). Despite the "FTMO" naming, the system is wired to an OANDA demo today; FTMO credentials get filled in only at the switch-over. The exact demo account number differs across docs (baseline says 1600140290; older notes say 1600054407; config says 0) — see open questions.</div>
+  </div>
+  <div class="flow">Every 3 s the EA timer fires → recompute indicators per symbol</div>
+
+  <h2>🌉 Layer 2 · MQL5 Bridge EA · OnTimer every 3 s — BridgeEA_FTMO_v1.mq5</h2>
+  <div class="layer">
+    <p>One EA on one chart drives both directions of the bridge through the MT5 <code>Common\Files</code> folder (FILE_COMMON), so it works no matter how MT5 is launched.</p>
+    <h3>JOB 1 — Write features (MT5 → Python)</h3>
+    <p>Each tick it loops all discovered symbols and writes <code>{SYMBOL}_features.csv</code> with 27 CLEAN features (overwritten every cycle):</p>
+    <table>
+      <tr><th>Group</th><th>#</th><th>Features</th></tr>
+      <tr><td>Price</td><td>4</td><td>close, high, low, volume</td></tr>
+      <tr><td>Trend</td><td>8</td><td>SMA20/50, fast/slow EMA, HTF(H4) EMAs, HTF dir/align</td></tr>
+      <tr><td>Momentum</td><td>4</td><td>RSI, Stoch K/D, momentum</td></tr>
+      <tr><td>Volatility</td><td>5</td><td>ATR, BB up/mid/low, volatility</td></tr>
+      <tr><td>Volume</td><td>3</td><td>vol SMA, vol ratio, price×vol</td></tr>
+      <tr><td>Sentiment</td><td>3</td><td>bull/bear/net (derived from RSI)</td></tr>
+    </table>
+    <h3>JOB 2 — Execute (Python → MT5)</h3>
+    <p>One <code>FileFindFirst("signal_*.txt")</code> pass per tick reads every signal file, splits <code>signal_{SYM}_{SOURCE}.txt</code> on the first underscore, and calls <code>ExecuteTradeWithId()</code> if action∈{BUY,SELL} and conf ≥ MinConfidence (0.45).</p>
+    <p>Also writes <code>open_positions.csv</code> (Python reads for position sync) and appends fills/closes to <code>trades.csv</code>. Re-discovers Market-Watch symbols every ~100 ticks (~5 min).</p>
+  </div>
+  <div class="flow">27-feature CSV per symbol in Common\Files</div>
+
+  <h2>🐍 Layer 3 · Python Orchestrator · run_cycle() every 3 s — live_trading_system.py</h2>
+  <div class="layer">
+    <p>Each cycle: (1) FTMO drawdown safety check — but in <code>simulation_mode</code> this returns immediately so signal generation (and training-data collection) never halts; (2) read the latest <code>{SYMBOL}_features.csv</code> for every symbol; (3) append the raw 27-vector to <code>feature_history/</code> for sequence models; (4) update a 50-bar OHLC buffer for Fibonacci/pullback; (5) expand 27→105 via <code>feature_expander.py</code>.</p>
+    <div class="flag"><b>Reality check:</b> the XGBoost models need exactly 27 inputs, and <code>make_ml_predictions()</code> uses <code>features[:27]</code>, so the 105-feature expansion is logged but not consumed by the ML path. Rule strategies pull a few named features from the expanded dict (and several — currency strength, returns_std — aren't in the 27, so they default to neutral).</div>
+  </div>
+  <div class="flow">features uploaded to Azure (if enabled) · 27-vector fed to all local sources</div>
+
+  <h2>☁️ Layer 3b · Parallel Cloud Inference · azure_bridge.py</h2>
+  <div class="layer">
+    <span class="tag">Azure Blob ↔ Google Colab Ensemble (LightGBM · CatBoost · Transformer)</span>
+    <p>The heavy non-tree models do not run locally. The local process uploads each symbol's feature CSV to the Azure container <code>trading-features</code>; a Google Colab runtime reads them, runs LightGBM + CatBoost + Transformer inference, and writes prediction JSONs back to <code>colab-predictions</code> as <code>{SYMBOL}_{source}_pred.json</code> (~every 30 s).</p>
+    <p>Local side polls <code>azure.get_all_predictions()</code>; predictions older than 1800 s (30 min) are discarded as stale, and a warning logs if no fresh predictions arrive for 10 min (Colab runtime likely disconnected). Auth is the <code>AZURE_STORAGE_CONNECTION_STRING</code> env var — if unset, <code>AzureBridge.enabled = False</code> and this entire path is silently skipped (local XGBoost + strategies still run). Colab access itself is a browser session in <code>colab/edge_profile/</code> kept alive by <code>colab/keepalive.py</code>.</p>
+  </div>
+  <div class="flow">3 cloud predictions join the local sources at Layer 4 — as UNGATED sources (Path B)</div>
+
+  <h2>Layer 4 — Signal Generation · 1 + 15 + 3 independent sources, TWO routing paths</h2>
+  <p>XGBoost is the only source that earns the full safety stack. Everything else fires with a cooldown and the EA's own checks as the only gates.</p>
+  <div class="two">
+    <div class="layer pathA">
+      <h3>PATH A · GATED (XGBoost only)</h3>
+      <p><b>Source:</b> <code>ensemble_predictor.py</code> — one XGBoost model per symbol that has one (9 today: EURUSD, GBPUSD, USDJPY, USDCHF, AUDUSD, USDCAD, NZDUSD, EURGBP, +AUDCAD). Symbols with no model → ABSTAIN, never blocked.</p>
+      <p><b>Output:</b> argmax over [SELL, HOLD, BUY] + confidence. HOLD-bias fix: if HOLD wins, promote the stronger of BUY/SELL with conf = max(dir_prob, hold·0.5, 0.35).</p>
+      <p>Then → confluence filtering → 6-phase gate (below) → <code>trade_commands.csv</code> + per-symbol signal file. Source tag: <code>xgboost</code>.</p>
+    </div>
+    <div class="layer pathB">
+      <h3>PATH B · UNGATED (15 strategy + 3 Colab)</h3>
+      <p><b>Sources (18):</b> Strategy Runner = 6 EA-translations (sma_3crossover, tema_barrington, ama_scalper, sma_price_cross, dema_rsi_hf, dema_supertrend) + 9 rule-based (volume_breakout, currency_strength_divergence, volatility_breakout, trend_following, mean_reversion, volatility_contraction, currency_correlation, low_volatility_momentum, high_volatility_reversal) + 3 Colab (colab_lgbm, colab_catboost, colab_transformer).</p>
+      <p><b>Routing:</b> <code>_run_strategy_engine()</code> — "No gates — signal fires → order sent." Each fired source writes its own <code>signal_{SYM}_{source}.txt</code> directly. Confidence is hardcoded 1.0 for strategies (Colab uses its own). Only guard: 15-min cooldown per (symbol, source).</p>
+    </div>
+  </div>
+  <div class="flow">Path A continues into the gate ↓ · Path B jumps straight to the signal file (Layer 6)</div>
+
+  <h2>🔎 Path A pre-filter · apply_confluence_filtering()</h2>
+  <div class="layer">
+    <span class="tag">Hard Filters → Regime → Confluence Score → Portfolio Risk</span>
+    <p><b>Hard filters</b> (min_atr_pips=8, 30-min news buffer, liquid-session). SIM <code>require_liquid_session</code> is set to False in <code>simulation_mode</code>, so Asian/off-hours pass here to maximise labelled data.</p>
+    <p><b>Regime detector</b> — ADX-based: trending ≥25, ranging ≤20, else volatile.</p>
+    <p><b>Confluence scorer</b> — weighted blend: mtf_trend 0.25 · support_resistance 0.20 · strategy_consensus 0.20 · momentum 0.15 · volume 0.10 · volatility 0.10. Must score ≥ 0.35 (config <code>confluence_threshold</code>) to proceed. <b>CORRECTED</b> baseline said "8-factor ≥ 0.25".</p>
+    <p><b>Portfolio risk</b> — RiskManager blocks new entries if portfolio risk ≥ 2% of trading capital (10% of account).</p>
+  </div>
+  <div class="flow">survivors enter the 6-phase decision gate</div>
+
+  <h2>🔒 Layer 5 — 6-Phase Decision Gate · PATH A (XGBoost) ONLY · inside generate_signals()</h2>
+
+  <div class="phase"><span class="pid">P1</span><b>Capital Check — FTMO / system drawdown</b>
+    <p>Run at the top of <code>run_cycle()</code>. Daily loss ≥ 3% (system) / 5% (FTMO) or total DD ≥ 10% halts all trading. SIM bypassed entirely in <code>simulation_mode</code> (<code>check_ftmo_drawdown_safety()</code> returns False) — so in the current sim run this phase never blocks. <b>FLAG</b> the EA enforces its own copy of these limits regardless (Layer 6).</p>
+    <div class="verdict">PASS within limits / sim mode · BLOCK live mode + limit breached</div>
+  </div>
+
+  <div class="phase"><span class="pid">P2</span><b>Dimension Check — 4 dimensions (AGREE / ABSTAIN / DISAGREE)</b>
+    <ul>
+      <li>🔵 <b>REGIME</b> — TRENDING→AGREE; RANGING/VOLATILE→ABSTAIN; conf&lt;0.4→ABSTAIN.</li>
+      <li>🟣 <b>SESSION</b> — London 07:00–16:00 &amp; NY 12:00–21:00 UTC→AGREE; overlap 12:00–16:00 best; JPY-Tokyo→ABSTAIN; hour&lt;7 or ≥21→DISAGREE (veto). <b>CORRECTED</b> hours vs baseline's 08:00/13:00.</li>
+      <li>🔵 <b>ML</b> — XGBoost; matches dir + agreement≥0.67→AGREE; opposite→DISAGREE; no model / HOLD / low-conf→ABSTAIN.</li>
+      <li>🟠 <b>CONFLUENCE</b> — ≥0.35→AGREE; 0.25–0.35→ABSTAIN; &lt;0.25→DISAGREE (veto).</li>
+    </ul>
+    <div class="verdict">VETO any single DISAGREE blocks the trade — <b>FLAG</b> baseline wrongly said "no hard vetoes"</div>
+  </div>
+
+  <div class="phase"><span class="pid">P3</span><b>Counter Vote — ≥ 3 / 4 AGREE and no veto</b>
+    <p><code>can_trade = (agrees ≥ 3) AND (no DISAGREE)</code>. With a model: 3/4 needed (one ABSTAIN tolerated). Without a model: ML abstains, so all 3 remaining must AGREE. (P2/P3 are one computation in <code>DimensionChecker.check_all()</code>; split here for readability.)</p>
+    <div class="verdict">PASS ≥3 AGREE, 0 DISAGREE · BLOCK otherwise</div>
+  </div>
+
+  <div class="phase"><span class="pid">P4</span><b>Integration — direction, SL/TP, scale-in validation</b>
+    <p>Skip HOLD; require confidence ≥ 0.35; optional news confidence adjustment. SL/TP = 1.5× / 3.0× ATR (fixed 2:1). <b>CORRECTED</b> baseline said 2×ATR. Scale-in only if: same direction, &lt; 3 positions, at breakeven, ≥35% of reward reached, confluence ≥ 0.35, and pullback valid; scale-in SL = 75% of prior risk.</p>
+    <div class="verdict">PASS direction + levels set · BLOCK HOLD / conf&lt;0.35 / scale-in invalid</div>
+  </div>
+
+  <div class="phase"><span class="pid">P5</span><b>Danger Scoring — 7 categories, 0–21, ≥ 13 blocks</b>
+    <p><code>DangerScorer</code> sums points across regime · session · ml · technical · stress (drawdown/losing streak) · correlation (same-direction heat) · event (mins-to-high-impact news). Score ≥ 13 blocks; otherwise yields a <code>size_multiplier</code> (currently logged, not yet applied to lot).</p>
+    <div class="verdict">PASS 0–12 · BLOCK ≥ 13</div>
+  </div>
+
+  <div class="phase"><span class="pid">P6</span><b>Anti-Fragile Entry — probe, then build</b>
+    <p>Fresh entry uses a probe lot 0.05 with a build plan toward target 0.15 (add 0.05 at R-multiple triggers; require ≥3 dims, danger &lt;13, position at BE to add). <b>CORRECTED</b> baseline said probe 0.01 → max 0.05 (those were older v-numbers). Scale-in (existing position) sends 0.05.</p>
+    <div class="verdict">PROBE 0.05 · BUILD +0.05 at R-levels · TARGET 0.15</div>
+  </div>
+  <div class="flow">Path A survivor → write_trade_commands() → per-symbol signal file</div>
+
+  <h2>📄 Layer 6 · File Bridge · MT5 Common\Files — Signal Files (both paths converge)</h2>
+  <div class="layer">
+    <p>Both Path A and Path B emit the same artifact: <code>signal_{SYMBOL}_{SOURCE}.txt</code>, one line, no header: symbol, action, confidence, sl_price, tp_price, lot, trade_id, timestamp.</p>
+    <p><code>sl_price = tp_price = 0</code> by design — Python lets the EA compute SL/TP from live ATR so non-forex instruments (US500 point 0.1, BTCUSD) get correct pip maths. The <code>trade_id</code> carries attribution end-to-end. Python keeps a 15-min cooldown per (symbol, source) before re-writing.</p>
+  </div>
+  <div class="flow">EA picks up the file on its next 3-s tick</div>
+
+  <h2>💹 Layer 7 · Order Execution · ExecuteTradeWithId() — EA-Side Validation &amp; Placement</h2>
+  <div class="layer">
+    <p>The executed code path checks, in order:</p>
+    <ul>
+      <li><code>EnableTrading</code> and <code>CheckFTMOLimits()</code> — daily 3%/5%, total 10% halts.</li>
+      <li><code>SourcePositionExists()</code> — if a position commented <code>FTMO_AI_{source}</code> is already open on the symbol, skip. One position per (symbol, source).</li>
+      <li>MinConfidence 0.45 gate at read time — <b>FLAG</b> Python's Path-A threshold is 0.35, so XGBoost signals with 0.35–0.45 confidence pass Python but are rejected here. Strategy signals send conf 1.0, so they always clear.</li>
+      <li>Min-lot + lot-step normalisation per symbol (0.01 forex, 0.1 US500…).</li>
+      <li>Spread ≤ MaxSpreadPips (5); else skip.</li>
+      <li>ATR SL/TP: BUY sl = ask − 1.5·ATR, tp = ask + 3.0·ATR (and inverse for SELL), each validated against SYMBOL_TRADE_STOPS_LEVEL and normalised to digits.</li>
+    </ul>
+    <div class="flag"><b>Dormant guards:</b> portfolio-risk %, correlation-group cap (max 2), max-total-positions (10) and streak-based sizing live in the other function <code>ExecuteTrade()</code>, which the signal scanner never calls. On the live signal path they are not enforced — only FTMO DD, spread, one-per-source and min-lot are.</div>
+  </div>
+  <div class="flow">order opened → managed continuously, then logged on close</div>
+
+  <h2>🎚️ Layer 7b · ManagePositions() · every 5 s, all magic-number positions</h2>
+  <div class="layer">
+    <span class="tag">Break-Even · Regime Trailing · Partial TP · Progressive Trail</span>
+    <p>Applies to every open position regardless of which path opened it: Break-even at 0.25R (+2-pip buffer); Partial TP closes 50% at 2:1 then extends TP to 3:1 and moves SL to BE; regime-adaptive trailing (ATR× 1.5 ranging / 2.5 trending / 3.5 volatile) tightened by progressive tiers (×0.9 / 0.75 / 0.5 at 1.0 / 1.5 / 2.0 R). Fresh bid/ask fetched immediately before each modify to avoid race conditions.</p>
+  </div>
+  <div class="flow">on close → outcome labelled and logged (both sides)</div>
+
+  <h2>📋 Logging — two sinks</h2>
+  <div class="cols">
+    <div class="layer">
+      <h3>EA Execution Log — trades.csv (Common\Files)</h3>
+      <p>On every fill/close: ticket, symbol, direction, 3-tier outcome — TP (take-profit hit), TRAIL (SL reason but profit&gt;0), SL (loss) — entry/exit, volume, profit, trade_id, signal_source (parsed from the <code>FTMO_AI_{source}</code> comment). Drives streak tracking and the retrainer.</p>
+    </div>
+    <div class="layer">
+      <h3>Unified Trade Logger — data/unified_trades.csv (Python)</h3>
+      <p>One row per signal from every source (gated or not): trade_id, source, source_type, action, confidence, confluence, dimension votes/count, danger score, key indicators (close, RSI, ATR, momentum, volatility), would_execute / actually_executed. Primary dataset for "which source works on which symbol."</p>
+    </div>
+  </div>
+  <div class="flow">Sunday 00:00 UTC — retrainer consumes the execution log</div>
+
+  <h2>🔄 Layer 9 · Self-Improvement · daily_retrainer.py (summary-level)</h2>
+  <div class="layer">
+    <span class="tag">XGBoost Auto-Retrain from Execution Outcomes</span>
+    <p>Scheduled ~Sunday 00:00 UTC. Labels closed trades by outcome (BUY+TP→BUY, BUY+SL→SELL, SELL+TP→SELL, SELL+SL→BUY, no-trade→HOLD), requires ≥ 50 outcomes per symbol, and saves <code>{SYMBOL}_xgboost_CLEAN27.joblib</code> only if val-acc ≥ the incumbent. Symbols on rule-based-only graduate to the gated ML path once they accumulate enough data — the AUDCAD model is the likely first such graduate (open question #3). <b>NOTE</b> retrainer internals taken from handoff docs, not line-verified this pass.</p>
+    <div class="flag">♻️ <b>Feedback loop:</b> execution outcomes → labels → new XGBoost → more symbols on the gated path → more outcomes. (Note: only Path-A/XGBoost self-improves; Path-B strategy &amp; Colab sources do not learn from outcomes here.)</div>
+  </div>
+
+  <h2>⚠️ Risk Overlay — what is ACTUALLY active on the executed signal path</h2>
+  <div class="cols">
+    <div class="layer">
+      <h3 class="ok">Active (enforced)</h3>
+      <ul>
+        <li>FTMO daily 5% / total 10% + system 3% (EA and Python, though Python's is sim-bypassed)</li>
+        <li>Spread ≤ 5 pips (EA)</li>
+        <li>One position per (symbol, source) (EA)</li>
+        <li>Per-symbol min-lot (EA)</li>
+        <li>15-min per-source cooldown (Python)</li>
+      </ul>
+      <h3>Path-A only</h3>
+      <ul>
+        <li>Confluence ≥ 0.35</li>
+        <li>Dimension veto + 3/4 vote</li>
+        <li>Danger &lt; 13</li>
+        <li>Anti-fragile probe→build</li>
+        <li>Portfolio-risk 2% (Python RiskManager pre-check)</li>
+      </ul>
+      <p class="verdict">(none of these touch Path B)</p>
+    </div>
+    <div class="layer">
+      <h3 class="no">Dormant / not wired</h3>
+      <ul>
+        <li>EA correlation cap (2/group)</li>
+        <li>EA max-total-positions (10)</li>
+        <li>EA streak-based sizing</li>
+        <li>Danger size_multiplier (logged only)</li>
+      </ul>
+      <p class="verdict">→ all live in unused <code>ExecuteTrade()</code></p>
+    </div>
+  </div>
+
+  <h2>🔑 Credentials &amp; Setup Touchpoints</h2>
+  <p>Where each secret plugs into the flow. No real values live in the repo — only locations. (from CREDENTIALS_MAP.md)</p>
+  <table>
+    <tr><th>Credential</th><th>Where it lives</th><th>Consumed by / effect</th><th>Set?</th></tr>
+    <tr><td>MT5 login / password / server</td><td><code>config/ftmo_config.json → account</code> (gitignored)</td><td><code>run_system.py → mt5.login()</code>; <code>symbol_manager.py</code> for discovery. Gates Layers 1–2.</td><td class="no">No — blank, server "OANDA-Demo-1"</td></tr>
+    <tr><td>Azure Storage conn. string</td><td>env var <code>AZURE_STORAGE_CONNECTION_STRING</code></td><td><code>azure_bridge.py</code>. If unset → whole Colab path (Layer 3b + 3 Path-B sources) silently off.</td><td class="no">No</td></tr>
+    <tr><td>FRED API key</td><td>env var <code>FRED_API_KEY</code></td><td><code>news_analysis/data_sources/fred_api.py</code>. If unset → economic-release sentiment degrades gracefully.</td><td class="no">No</td></tr>
+    <tr><td>Google / Colab session</td><td>browser profile <code>colab/edge_profile/</code> (one-time <code>keepalive.py --login</code>)</td><td>Keeps the Colab runtime alive so Layer 3b produces predictions.</td><td class="ok">Yes — already logged in</td></tr>
+  </table>
+  <div class="flag">🔒 <b>Security item to action before any push:</b> <code>colab/edge_profile/</code> holds a live authenticated Google session and is not yet in <code>.gitignore</code>. The repo Codebreaker-source/AI-Trading-System is public — committing this would publish session cookies. Add <code>colab/edge_profile/</code> to <code>.gitignore</code> (flag to Andy first per file-edit rules).</div>
+
+  <h2>🤝 Coordination Protocol with Claude Code</h2>
+  <div class="layer">
+    <p><b>Division of labor.</b> CHAT = architecture, flowcharts, specs, reconciling requirements with Andy. CODE = all real file reads/edits/implementation on the local drive — same files Chat reasons about. Chat ships plans, not hand-applied diffs; Code reads the real files, confirms feasibility against current code, and implements per <code>claude.md</code> (plan mode, explicit per-file approval, full files, no hardcoded secrets).</p>
+    <p><b>Source-of-truth ranking when docs disagree:</b> (1) actual code in <code>FTMO_System/</code>; (2) <code>system_flowchart.html</code> (now this v2); (3) <code>FTMO_SYSTEM_HANDOFF.md</code> (2026-06-01); (4) original <code>claude.md</code> spec (most superseded).</p>
+    <p><b>Decisions log.</b> MHP <code>memory_get_handoff</code> is broken (charmap 0x9d decode error) — until fixed, every resolved open question gets appended to a Decisions Log in <code>CLAUDE_CHAT_HANDOFF.md</code> (Code writes it on request). That file is the durable cross-session memory.</p>
+    <p><b>Path discipline.</b> Always reference files by full path under <code>C:\Users\mt5-admin\Documents\TradingSystem\FTMO_System\</code> so there is no confusion with <code>AzureDeploy/</code> or the GitHub clone.</p>
+    <p><b>Loop:</b> Andy resolves the open questions below → relays answers to Claude Code → Code updates the code and/or appends to the Decisions Log → Chat regenerates the diagram if architecture changed.</p>
+  </div>
+
+  <h2>❓ Open Questions &amp; Source-vs-Doc Contradictions</h2>
+  <p>Flagged, not guessed. Items 1–6 carry over from the handoff; 7–13 are new contradictions found reading the source against the baseline/handoff.</p>
+  <ol>
+    <li class="q"><b>Local vs cloud split.</b> Local = XGBoost only; LightGBM/CatBoost/Transformer on Colab via <code>azure_bridge.py</code>. Permanent split, or should everything eventually run locally?</li>
+    <li class="q"><b>Label encoding.</b> Code = 0=SELL,1=HOLD,2=BUY; claude.md said 0=HOLD,1=BUY,2=SELL. Confirm code is canonical (it is what the models were trained on).</li>
+    <li class="q"><b>AUDCAD model.</b> <code>data/models/</code> has 9 models incl. AUDCAD (not in the original 8). Retrainer graduate or manual add?</li>
+    <li class="q"><b>GitHub clone sync.</b> Is <code>new_project_052626/AI-Trading-System</code> in sync with <code>FTMO_System/</code>, or has one diverged?</li>
+    <li class="q"><b>MHP encoding bug.</b> Fix <code>state.db</code> 0x9d decode error (with approval), or leave for now?</li>
+    <li class="q"><b>.gitignore for colab/edge_profile/</b> (live session, public repo) — approve adding it?</li>
+    <li class="q"><b>NEW — Ungated Path B intentional?</b> 15 strategy + 3 Colab sources skip confluence/dimension/danger/anti-fragile entirely (<code>_run_strategy_engine</code>: "No gates"). Is bypassing the safety stack for 18 of 19 sources the intended design, or should some/all route through the gate?</li>
+    <li class="q"><b>NEW — Confidence-threshold mismatch.</b> Python Path-A accepts conf ≥ 0.35 but the EA's MinConfidence = 0.45 rejects on read — XGBoost signals in 0.35–0.45 are generated then silently dropped. Align to one number?</li>
+    <li class="q"><b>NEW — Dormant EA guards.</b> Correlation cap, max-total-positions, streak sizing and portfolio-risk % live in <code>ExecuteTrade()</code>, which the signal scanner never calls (it uses <code>ExecuteTradeWithId()</code>). Should these be moved into the executed path? Right now nothing caps total positions or correlated exposure on live signals.</li>
+    <li class="q"><b>NEW — Danger size_multiplier unused.</b> Computed in P5 but only logged — lot size never actually scaled by it. Wire it up or drop it?</li>
+    <li class="q"><b>NEW — 105-feature expansion is vestigial.</b> Built and logged but ML uses <code>features[:27]</code>. Keep for future sequence models, or remove to cut overhead?</li>
+    <li class="q"><b>NEW — Comms path moved.</b> Live code reads/writes MT5 <code>Common\Files</code>; <code>FTMO_SYSTEM_HANDOFF.md</code> still documents <code>data/features/</code> + <code>data/execution_log/</code>. Update the handoff doc.</li>
+    <li class="q"><b>NEW — Account identity.</b> Baseline header says OANDA acct 1600140290; older notes 1600054407; config 0/blank. Which demo account is the sim actually running on right now?</li>
+  </ol>
+
+  <p class="sup">End of flowchart · all parameters above were read from source on 2026-06-11 unless marked "summary-level" · regenerate after open questions are resolved.</p>
+
+</div>
+</body>
+</html>

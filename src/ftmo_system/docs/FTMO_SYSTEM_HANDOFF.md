@@ -1,3 +1,7 @@
+> ⚠️ As of 2026-06-14, this file is SUPERSEDED by `CLAUDE_CHAT_HANDOFF.md` for
+> current state. Retained for history. Where they disagree, CLAUDE_CHAT_HANDOFF.md
+> and on-disk code win.
+
 # FTMO AI Trading System — Handoff Document
 Date: 2026-06-01
 
