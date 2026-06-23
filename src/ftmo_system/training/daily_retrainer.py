@@ -308,13 +308,15 @@ def train_transformer(X, y, w, holdout_pct=0.2):
 
 def retrain_symbol(symbol: str, df: pd.DataFrame,
                    local_model_dir: str, github_models_dir: str,
-                   min_trades: int = 50, holdout_pct: float = 0.2) -> dict:
+                   min_trades: int = 50, holdout_pct: float = 0.2,
+                   model_types: list | None = None) -> dict:
 
     result = {"symbol": symbol, "updated": [], "kept": [], "skipped": [], "errors": []}
+    effective_types = model_types or ["xgboost", "lightgbm", "catboost", "transformer"]
 
     if len(df) < min_trades:
         logger.info(f"{symbol}: {len(df)} rows < {min_trades} minimum — skipping all")
-        result["skipped"] = ["xgboost", "lightgbm", "catboost", "transformer"]
+        result["skipped"] = list(effective_types)
         return result
 
     X = extract_feature_matrix(df)
@@ -330,7 +332,7 @@ def retrain_symbol(symbol: str, df: pd.DataFrame,
 
     if len(X) < min_trades:
         logger.info(f"{symbol}: after NaN drop {len(X)} usable rows < {min_trades} — skipping all")
-        result["skipped"] = ["xgboost", "lightgbm", "catboost", "transformer"]
+        result["skipped"] = list(effective_types)
         return result
 
     dist = Counter(y.tolist())
@@ -357,6 +359,7 @@ def retrain_symbol(symbol: str, df: pd.DataFrame,
         ("catboost",    train_catboost,    os.path.join(github_models_dir, f"{sym_clean}_catboost.joblib"),  "sklearn"),
         ("transformer", train_transformer, os.path.join(gh_trf_dir,        f"{sym_clean}_transformer.pth"),  "transformer"),
     ]
+    tasks = [t for t in tasks if t[0] in effective_types]
 
     for name, trainer, model_path, mtype in tasks:
         try:

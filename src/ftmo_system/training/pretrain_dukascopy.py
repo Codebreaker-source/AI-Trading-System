@@ -22,6 +22,7 @@ Run: python training/pretrain_dukascopy.py
 
 from __future__ import annotations
 
+import argparse
 import logging
 import sys
 from pathlib import Path
@@ -43,12 +44,26 @@ HOLDOUT_PCT = 0.2
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Pretrain models from Dukascopy price-action splits")
+    parser.add_argument("--models", default="xgboost,lightgbm,catboost,transformer",
+                        help="comma-separated model types to train; e.g. "
+                             "'xgboost,lightgbm,catboost' to skip the transformer, "
+                             "or 'transformer' to batch only the transformer later")
+    parser.add_argument("--symbols", default="",
+                        help="comma-separated symbols to train (default: all with a split set)")
+    args = parser.parse_args()
+    model_types = [m.strip() for m in args.models.split(",") if m.strip()]
+
     if not SPLITS_DIR.exists():
         logger.error(f"{SPLITS_DIR} not found — run label_dukascopy_all.py first")
         return
 
     symbols = sorted({p.stem.replace("_train", "") for p in SPLITS_DIR.glob("*_train.parquet")})
-    logger.info(f"Pretraining {len(symbols)} symbols -> local={LOCAL_MODEL_DIR}  github={_DEFAULT_GITHUB_MODELS}")
+    if args.symbols.strip():
+        want = {s.strip().upper() for s in args.symbols.split(",") if s.strip()}
+        symbols = [s for s in symbols if s.upper() in want]
+    logger.info(f"Pretraining {len(symbols)} symbols ({', '.join(model_types)}) -> "
+                f"local={LOCAL_MODEL_DIR}  github={_DEFAULT_GITHUB_MODELS}")
 
     results = []
     for symbol in symbols:
@@ -65,6 +80,7 @@ def main():
             github_models_dir=_DEFAULT_GITHUB_MODELS,
             min_trades=MIN_TRADES,
             holdout_pct=HOLDOUT_PCT,
+            model_types=model_types,
         )
         results.append(result)
 
