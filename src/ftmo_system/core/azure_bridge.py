@@ -155,7 +155,7 @@ class AzureBridge:
         results: Dict[str, Dict[str, dict]] = {}
         for sym in symbols:
             sym_preds = {}
-            for src in ["lgbm", "catboost", "transformer"]:
+            for src in ["lgbm", "catboost", "xgboost", "transformer"]:
                 pred = self.get_prediction(sym, src)
                 if pred and pred.get("action") in ("BUY", "SELL"):
                     sym_preds[src] = pred

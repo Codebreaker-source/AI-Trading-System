@@ -18,6 +18,15 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 
+# Optional MT5 — used to derive exact per-symbol tick_size/tick_value so risk
+# is priced correctly for FX, metals, indices, energy, crypto and exotics.
+# Falls back to the forex pip tables below when MT5 is unavailable.
+try:
+    import MetaTrader5 as mt5
+    _MT5_AVAILABLE = True
+except Exception:
+    _MT5_AVAILABLE = False
+
 
 @dataclass
 class PositionRisk:
@@ -99,7 +108,48 @@ class RiskManager:
         
         self.open_positions: Dict[str, PositionRisk] = {}
         self._position_counter = 0
-    
+
+        # Cache of successful MT5 (tick_size, tick_value) lookups per symbol.
+        self._tick_spec_cache: Dict[str, Tuple[float, float]] = {}
+
+    def _get_risk_spec(self, symbol: str) -> Tuple[float, float]:
+        """
+        Return (price_unit, dollar_per_unit_per_lot) for risk math:
+
+            risk = (abs(entry - sl) / price_unit) * dollar_per_unit * lot_size
+
+        Prefers live MT5 trade_tick_size / trade_tick_value, which is exact for
+        every instrument class (FX, metals, indices, energy, crypto, exotics)
+        and already converted to the account currency. Falls back to the forex
+        pip tables (then forex defaults) when MT5 is unavailable or the symbol
+        has no contract spec — e.g. running without a terminal attached.
+
+        NOTE: with MT5 specs, price_unit == tick_size and dollar_per_unit ==
+        tick_value, so the legacy 'pip_value/pip_dollar' formula is unchanged.
+        """
+        # 1) Live MT5 contract spec (cached after first success)
+        cached = self._tick_spec_cache.get(symbol)
+        if cached is not None:
+            return cached
+        if _MT5_AVAILABLE:
+            try:
+                info = mt5.symbol_info(symbol)
+            except Exception:
+                info = None
+            if info is not None:
+                tick_size = float(getattr(info, 'trade_tick_size', 0.0) or 0.0)
+                tick_value = float(getattr(info, 'trade_tick_value', 0.0) or 0.0)
+                if tick_size > 0.0 and tick_value > 0.0:
+                    spec = (tick_size, tick_value)
+                    self._tick_spec_cache[symbol] = spec
+                    return spec
+
+        # 2) Forex pip tables (fallback) — strip broker suffix to match keys
+        symbol_clean = symbol.replace('.sim', '')
+        pip_value = self.pip_values.get(symbol, self.pip_values.get(symbol_clean, 0.0001))
+        pip_dollar = self.pip_dollar_values.get(symbol, self.pip_dollar_values.get(symbol_clean, 10.0))
+        return float(pip_value), float(pip_dollar)
+
     def calculate_position_risk(
         self,
         symbol: str,
@@ -121,10 +171,9 @@ class RiskManager:
         Returns:
             Tuple of (risk_amount_dollars, risk_percent)
         """
-        symbol_clean = symbol.replace('.sim', '')
-        pip_value = self.pip_values.get(symbol, self.pip_values.get(symbol_clean, 0.0001))
-        pip_dollar = self.pip_dollar_values.get(symbol, self.pip_dollar_values.get(symbol_clean, 10.0))
-        
+        # Option A: exact per-symbol tick spec from MT5 (forex table fallback)
+        pip_value, pip_dollar = self._get_risk_spec(symbol)
+
         # v2.33 FIX: Check for zero-risk positions (SL at/beyond entry)
         if direction.upper() == 'BUY' and stop_loss >= entry_price:
             return 0.0, 0.0  # Zero risk for scale-in with SL at/above entry
@@ -421,8 +470,8 @@ class RiskManager:
             if is_zero_risk:
                 risk_amount = 0.0  # Scale-in with SL at BE = zero additional risk
             else:
-                pip_value = self.pip_values.get(symbol, 0.0001)
-                pip_dollar = self.pip_dollar_values.get(symbol, 10.0)
+                # Option A: exact per-symbol tick spec from MT5 (forex fallback)
+                pip_value, pip_dollar = self._get_risk_spec(symbol)
                 sl_pips = abs(entry_price - stop_loss) / pip_value
                 # FIX: pip_dollar is per standard lot (1.0), so multiply by volume directly
                 risk_amount = sl_pips * pip_dollar * volume

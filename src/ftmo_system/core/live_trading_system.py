@@ -268,7 +268,15 @@ class LiveTradingSystemV5:
         self.MIN_HOLD_MINUTES_FOR_SCALEOUT = 30  # Minimum minutes position must be held
         self.SCALEOUT_LOT_SIZE = 0.05  # Lot size to close at each quarter level
         self.REQUIRE_BE_FOR_SCALEOUT = True  # Position must be at BE+ before scale-out
-        
+
+        # ── Flat-lot data-collection mode (Andy) ────────────────────────────
+        # Broker minimum is 0.01 for every symbol. Take exactly one 0.01
+        # position per signal so MT5 profit/loss files map 1:1 to signals for
+        # backtest/training. No probe->build, no scale-in adds, no partial
+        # scale-outs (you can't partial-close a 0.01 position anyway).
+        self.FLAT_LOT = 0.01
+        self.DISABLE_SCALING = True
+
         # Initialize rule-based strategies
         self.rule_strategies = RuleBasedStrategies()
 
@@ -969,10 +977,22 @@ class LiveTradingSystemV5:
             positions = self.get_open_positions()
             is_fresh_entry = pair not in positions
             
-            if is_fresh_entry:
+            if self.DISABLE_SCALING:
+                # Flat-lot mode: one 0.01 position per signal, no probe/build.
+                # If this symbol already has an open position, skip — we don't
+                # stack adds (one signal -> one position for clean PnL mapping).
+                if not is_fresh_entry:
+                    continue
+                self.log_system(
+                    f"   [ENTRY] {pair}: flat {self.FLAT_LOT} lots | "
+                    f"Dims: {dimension_result.count}/4"
+                )
+                lot_size_to_use = self.FLAT_LOT
+                is_probe = True
+            elif is_fresh_entry:
                 # Fresh entry: Use probe lot size, create build plan
                 probe_lot = self.anti_fragile_builder.get_probe_lot_for_signal(size_multiplier)
-                
+
                 # Create build plan for staged position building
                 build_plan = self.anti_fragile_builder.create_build_plan(
                     symbol=pair,
@@ -985,7 +1005,7 @@ class LiveTradingSystemV5:
                     confluence_score=confluence_score,
                     size_multiplier=size_multiplier
                 )
-                
+
                 self.log_system(
                     f"   [BUILD] {pair}: PROBE entry {probe_lot} lots | "
                     f"Target: {build_plan.target_lot} | Dims: {dimension_result.count}/4"
@@ -1351,6 +1371,11 @@ class LiveTradingSystemV5:
         - Requires: position in profit, held minimum time, at breakeven
         - Closes 0.05 lots at each quarter level
         """
+        # Flat-lot mode: no scale-in builds and no partial scale-outs — a 0.01
+        # position is the broker minimum and can't be partially closed.
+        if self.DISABLE_SCALING:
+            return []
+
         scaling_signals = []
         open_positions = self.get_open_positions()
         
@@ -1833,6 +1858,9 @@ class LiveTradingSystemV5:
             trade_id  = cmd.get('trade_id', make_trade_id(cmd['symbol'], source))
             sig_path  = self.features_dir / f"signal_{cmd['symbol']}_{source}.txt"
 
+            # Flat-lot mode: force every main-path order to the broker minimum.
+            _lot = self.FLAT_LOT if self.DISABLE_SCALING else cmd.get('lot_size', 0.01)
+
             # Write signal file for EA
             try:
                 with open(sig_path, 'w') as _sf:
@@ -1842,7 +1870,7 @@ class LiveTradingSystemV5:
                         f"{round(cmd['confidence'], 4)},"
                         f"{round(cmd.get('sl_price', 0), 8)},"
                         f"{round(cmd.get('tp_price', 0), 8)},"
-                        f"{round(cmd.get('lot_size', 0.01), 2)},"
+                        f"{round(_lot, 2)},"
                         f"{trade_id},"
                         f"{cmd['timestamp']}\n"
                     )

@@ -71,6 +71,39 @@ def _pip_value(symbol: str) -> float:
     return 0.0001
 
 
+_CONTRACT_SPEC_CACHE: dict = {}
+
+
+def _contract_spec(symbol: str):
+    """
+    Return (tick_size, tick_value) for `symbol` from MT5 — the exact price
+    increment and its dollar value per 1.0 lot in the account currency.
+    Correct for FX, metals, indices, energy and crypto (each has a different
+    contract size), and already FX-converted by MT5. Returns None when MT5 is
+    unavailable or the symbol has no usable spec.
+
+    Used to price profit_usd as (price_move / tick_size) * tick_value * volume,
+    replacing the old hardcoded forex 100,000 contract size.
+    """
+    if mt5 is None:
+        return None
+    cached = _CONTRACT_SPEC_CACHE.get(symbol)
+    if cached is not None:
+        return cached
+    try:
+        info = mt5.symbol_info(symbol)
+    except Exception:
+        info = None
+    if info is not None:
+        ts = float(getattr(info, "trade_tick_size", 0.0) or 0.0)
+        tv = float(getattr(info, "trade_tick_value", 0.0) or 0.0)
+        if ts > 0.0 and tv > 0.0:
+            spec = (ts, tv)
+            _CONTRACT_SPEC_CACHE[symbol] = spec
+            return spec
+    return None
+
+
 class TradeOutcomeSimulator:
     def __init__(self, unified_trades_path: str, exit_params: ExitParams = None):
         self.path = Path(unified_trades_path)
@@ -199,9 +232,19 @@ class TradeOutcomeSimulator:
 
         if action == "BUY":
             profit_pips = (exit_price - entry) / pip
+            price_move  = exit_price - entry
         else:
             profit_pips = (entry - exit_price) / pip
-        profit_usd = profit_pips * pip * 100000 * state.vol
+            price_move  = entry - exit_price
+
+        # profit_usd from real per-symbol contract economics (MT5 tick spec),
+        # so indices/metals/crypto aren't priced with forex's 100k contract size.
+        spec = _contract_spec(symbol)
+        if spec is not None:
+            tick_size, tick_value = spec
+            profit_usd = (price_move / tick_size) * tick_value * state.vol
+        else:
+            profit_usd = price_move * 100000 * state.vol  # forex-style fallback
 
         duration_min = (exit_time - signal_time).total_seconds() / 60.0
 

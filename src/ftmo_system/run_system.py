@@ -236,16 +236,19 @@ def main():
         trading_capital_percent=config.get("risk", {}).get("trading_capital_percent", 0.10),
     )
 
-    # Step 6: Start daily retrainer background thread
-    logger.info("[STEP 6] Starting daily retrainer background thread...")
+    # Step 6: Start daily retrainer background thread (gated by config)
     stop_event = threading.Event()
-    retrain_thread = threading.Thread(
-        target=run_daily_retrain_loop,
-        args=(config, stop_event),
-        daemon=True,
-        name="DailyRetrainer",
-    )
-    retrain_thread.start()
+    if config.get("retraining", {}).get("enabled", True):
+        logger.info("[STEP 6] Starting daily retrainer background thread...")
+        retrain_thread = threading.Thread(
+            target=run_daily_retrain_loop,
+            args=(config, stop_event),
+            daemon=True,
+            name="DailyRetrainer",
+        )
+        retrain_thread.start()
+    else:
+        logger.info("[STEP 6] Daily retrainer DISABLED via config (retraining.enabled=false) — skipping")
 
     # Step 6b: Start tick-based outcome simulator background thread
     logger.info("[STEP 6b] Starting trade outcome simulator background thread...")
