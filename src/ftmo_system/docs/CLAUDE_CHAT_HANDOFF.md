@@ -2,9 +2,11 @@
 
 Purpose: ground Claude Chat (planning) in the **actual current state of the
 codebase**, which Claude Code (this CLI, direct filesystem access) verified
-directly. Last verified: 2026-06-14 (Chat, via Windows-MCP — pretraining +
-Dukascopy data-integrity + per-model-independence verification, and a
-simulated-vs-actual trade analysis; see the two 2026-06-14 entries in §8).
+directly. Last updated: 2026-06-22 (Claude Code, direct VPS edits + GitHub push —
+XGBoost moved to Colab, two tick-pricing bugs fixed, flat 0.01 mode, retrainer
+disabled, training rule corrected to Option A; see the 2026-06-22 entry at the
+top of §8). Prior verification 2026-06-14 (Chat) covered pretraining +
+Dukascopy data-integrity + per-model-independence + sim-vs-actual analysis.
 
 ---
 
@@ -381,6 +383,33 @@ Google session and is **not yet gitignored** — see open question #6.
 ## 8. Decisions Log
 
 (Durable cross-session memory while MHP `memory_get_handoff` is broken. Newest first.)
+
+### 2026-06-22 — XGBoost moved to Colab, two tick-pricing bugs fixed, flat 0.01 mode, retrainer disabled, training rule corrected to Option A (Claude Code, direct edits + GitHub push)
+
+**All changes by Claude Code (this CLI) on the VPS, then synced to repo. New demo account `1600149577`, $200,000, `simulation_mode`, trade_allowed=True; EA on M15; account trades enabled (unlike old 1600140290).**
+
+**1) XGBoost moved INTO Colab (it now runs there, NOT locally).** "Put xgboost in colab" = *move* it to free the local device — NOT run in both places. There is one xgboost source: `colab_xgboost`.
+- `colab/trading_inference.ipynb` (repo copy, the one Colab clones): Cell 4 loads `_xgboost.joblib` → `xgboost_models`; Cell 7 runs it in `run_inference_for_symbol` (4-tuple return) uploading `colab_xgboost`; Cells 8/9 show XGB. Also fixed a latent Cell 9 heartbeat bug (literal `\n` would SyntaxError the loop).
+- Copied 35 missing `_xgboost.joblib` into repo `models/current/` (was 8, now 43 — full LGB/CAT/XGB parity). **Pushed: commit c301712.**
+- `core/azure_bridge.py:158` now ingests `xgboost` in `get_all_predictions` source list.
+- ENCODING: the whole pipeline (build_training_sets, label_dukascopy_all, data_labeler, all retrainer models) uses **0=SELL,1=HOLD,2=BUY** — matches Colab Cell 7. The CLAUDE.md "0=HOLD,1=BUY,2=SELL" note is STALE. No inversion risk.
+- **PENDING:** removing the local 6-phase XGBoost path (the actual "free local"). Deferred until clean post-fix data shows which sources are profitable — Andy wants to see performance before cutting.
+
+**2) TWO tick-pricing bugs fixed — same MT5 approach (`mt5.symbol_info` trade_tick_size/trade_tick_value, forex table fallback).**
+- `confluence/risk_manager.py`: position risk used a hardcoded forex pip table (0.0001/$10) for ALL symbols → non-forex grossly mispriced (US500 0.10 lot = $225,000 phantom), pinning portfolio risk at **208.5%** and blocking ALL signals. Fixed via `_get_risk_spec()` (US500 → $2.25, gold/CNH correct, forex unchanged).
+- `core/trade_outcome_simulator.py`: `profit_usd = (exit-entry)*100000*vol` hardcoded forex contract size → indices/metals/crypto PnL overstated up to 100,000× (US500 $7,800 vs real $0.08; this is why old `unified_trades` shows −$320M sources). Fixed via `_contract_spec()`. Now simulated PnL matches the MT5 broker P/L files (the cross-check Andy wants).
+
+**3) Flat 0.01 mode** — `core/live_trading_system.py`: `FLAT_LOT=0.01`, `DISABLE_SCALING=True`. One 0.01 position per signal; no probe/build/scale-in/scale-out (broker min is 0.01; can't partial-close it). EA already honors the lot Python sends (≥0.01), so no recompile. Strategy + Colab paths already emitted 0.01.
+
+**4) Daily retrainer DISABLED** — `config/ftmo_config.json` `retraining.enabled=false` + `run_system.py` gates the thread. No Windows retrainer task is registered.
+
+**5) Training rule CORRECTED → Option A (hard rule).** Andy: "I do not want them trained by a signal other than the ones they themselves generate." Each ML model trains ONLY on the outcomes of trades IT generated (filter `unified_trades` by `signal_source`), labeled by price resolution (TP/SL via `data_labeler.label_trade`). NOT the shared full-history price-action labels that `daily_retrainer.py` currently builds (that is Option B and contradicts the rule). Source map: xgboost←`colab_xgboost`, lightgbm←`colab_lgbm`, catboost←`colab_catboost`, transformer←`colab_transformer`. Rule-based strategies never retrained. Option-A rework was PLANNED then SHELVED (retrainer disabled until post-fix own-trade data exists). Pretrained seeds = ~3yr Dukascopy (separate pipeline). Prior handoff/memory said "price-action labels only" — that was WRONG; corrected.
+
+**6) DO NOT use pre-2026-06-22 `unified_trades.csv`** for training or performance decisions: `profit_usd` corrupted (sim bug #2), lots vary (old scaling), ML/6-phase was risk-blocked so it barely traded. Win-rate-by-geometry (PnL-independent) leader so far: `colab_lgbm` ~85%, but win rate ≠ profit. Also ~10 malformed rows (signal_source = PARTIAL_TP/numbers) — concurrent-write corruption; a guard was approved but not yet added.
+
+**7) GitHub pushes:** `c301712` (xgboost notebook + 35 models), `35db803` (VPS→repo sync of the 5 changed code files: risk_manager, trade_outcome_simulator, live_trading_system, azure_bridge, run_system). Config stays gitignored.
+
+**Open / pending:** (a) Andy restarts `run_system.py` manually (picks up flat-0.01 + both pricing fixes) and re-runs the Colab notebook (picks up xgboost). (b) Accumulate clean post-fix data. (c) Build per-source profitability report vs MT5 broker P/L. (d) THEN decide local 6-phase removal + re-enable an Option-A retrainer. (e) Add the malformed-row guard. (f) The earlier full VPS→repo sync (34 VPS-only files, §8 2026-06-18b item 6) is still only partially done — this session synced the 5 it touched; the rest remain.
 
 ### 2026-06-18b — CatBoost/Transformer failure root-caused, M15 timeframe correction, EA recompile not needed, full VPS→repo sync planned (Chat, read-only + Decisions-Log write)
 
