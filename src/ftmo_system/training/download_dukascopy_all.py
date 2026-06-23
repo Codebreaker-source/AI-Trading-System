@@ -13,6 +13,7 @@ Run: python training/download_dukascopy_all.py
 
 from __future__ import annotations
 
+import argparse
 import logging
 import sys
 import time
@@ -72,6 +73,14 @@ SYMBOL_INSTRUMENTS = {
     "USDSGD": I.INSTRUMENT_FX_CROSSES_USD_SGD,
     "USDZAR": I.INSTRUMENT_FX_CROSSES_USD_ZAR,
 
+    # Crosses added 2026-06-23 — complete FTMO forex-cross coverage (previously missing)
+    "EURJPY": I.INSTRUMENT_FX_CROSSES_EUR_JPY,
+    "GBPCAD": I.INSTRUMENT_FX_CROSSES_GBP_CAD,
+    "GBPCHF": I.INSTRUMENT_FX_CROSSES_GBP_CHF,
+    "GBPJPY": I.INSTRUMENT_FX_CROSSES_GBP_JPY,
+    "GBPNZD": I.INSTRUMENT_FX_CROSSES_GBP_NZD,
+    "NZDJPY": I.INSTRUMENT_FX_CROSSES_NZD_JPY,
+
     # Metals
     "XAUUSD": I.INSTRUMENT_FX_METALS_XAU_USD,
     "XAGUSD": I.INSTRUMENT_FX_METALS_XAG_USD,
@@ -90,6 +99,21 @@ SYMBOL_INSTRUMENTS = {
 
 END_DATE = datetime.now()
 START_DATE = END_DATE - timedelta(days=3 * 365)
+
+# A previously-downloaded CSV spanning at least this many days is treated as
+# complete and skipped on re-run (resume). Use --force to re-download anyway.
+MIN_COMPLETE_SPAN_DAYS = 1000
+
+
+def _is_complete(out_path: Path) -> bool:
+    """True if a prior download already covers ~the full 3-year range."""
+    if not out_path.exists():
+        return False
+    try:
+        ts = pd.to_datetime(pd.read_csv(out_path, usecols=["timestamp"])["timestamp"])
+        return len(ts) > 0 and (ts.max() - ts.min()).days >= MIN_COMPLETE_SPAN_DAYS
+    except Exception:
+        return False
 
 
 def download_symbol(symbol_name: str, instrument) -> pd.DataFrame | None:
@@ -122,11 +146,22 @@ def download_symbol(symbol_name: str, instrument) -> pd.DataFrame | None:
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Download 3yr M15 Dukascopy data for all FTMO symbols")
+    parser.add_argument("--force", action="store_true",
+                        help="re-download every symbol even if a complete CSV already exists")
+    args = parser.parse_args()
+
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     logger.info(f"Downloading {len(SYMBOL_INSTRUMENTS)} symbols, {START_DATE.date()} -> {END_DATE.date()}, M15")
 
     summary = []
+    skipped = 0
     for symbol, instrument in SYMBOL_INSTRUMENTS.items():
+        out_path = OUTPUT_DIR / f"{symbol}_M15_dukascopy.csv"
+        if not args.force and _is_complete(out_path):
+            logger.info(f"[{symbol}] skip — already complete ({out_path.name})")
+            skipped += 1
+            continue
         df = download_symbol(symbol, instrument)
         if df is not None:
             span_days = (df["timestamp"].max() - df["timestamp"].min()).days
@@ -134,6 +169,8 @@ def main():
         else:
             summary.append((symbol, 0, None, None, 0))
         time.sleep(1)
+
+    logger.info(f"Skipped {skipped} already-complete symbol(s); downloaded {len(summary)} this run")
 
     logger.info("=" * 70)
     logger.info(f"{'SYMBOL':<10} {'CANDLES':>10} {'SPAN_DAYS':>10}  RANGE")
