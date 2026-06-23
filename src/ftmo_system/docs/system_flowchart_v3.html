@@ -63,6 +63,43 @@
     </ol>
   </div>
 
+  <h2>🗺️ Pipeline at a glance — visual flow</h2>
+  <div class="layer">
+    <pre class="mermaid">
+flowchart TD
+  MT5["📡 MT5 · OANDA demo 1600149577<br/>$200k · simulation_mode · 49 symbols"]
+  EA["🌉 Bridge EA · OnTimer 3s<br/>writes 27-feat CSV · reads signals · logs fills"]
+  PY["🐍 Python run_cycle · 3s<br/>read features · append history · 27→105 (vestigial)"]
+  MT5 --> EA --> PY
+
+  PY --> UP["☁️ Upload features → Azure trading-features"]
+  UP --> COLAB["🧠 Colab GPU ensemble<br/>LightGBM · CatBoost · XGBoost · Transformer"]
+  COLAB --> DN["☁️ Azure colab-predictions"]
+
+  PY --> STRAT["🎯 Strategy engine · 15 sources<br/>UNGATED · 15-min per-source cooldown"]
+  PY -. pending removal .-> GATE["♟️ Local XGBoost · Path A<br/>confluence → 6-phase gate"]
+
+  DN --> SIG["📄 Signal files · flat 0.01 lot<br/>signal per symbol+source"]
+  STRAT --> SIG
+  GATE --> SIG
+
+  SIG --> EXE["💹 EA execute<br/>FTMO limits · spread ≤ 5 · 1 per symbol-source · min-lot"]
+  EXE --> MGMT["🎚️ ManagePositions · 5s<br/>break-even · regime trail · partial TP"]
+  MGMT --> LOGS["📋 Logs<br/>trades.csv · unified_trades.csv"]
+  LOGS --> SIM["🔁 Tick simulator labels outcomes<br/>profit_usd tick-value FIXED"]
+  SIM --> RT["🔄 Retrainer · DISABLED<br/>Option A — per-source own-trades only"]
+
+  DUKA["📚 Dukascopy 3yr pretrain · seeds<br/>49 symbols · XGB/LGB/CAT + Transformer"] -. seeds .-> COLAB
+  DUKA -. seeds .-> GATE
+
+  classDef cloud stroke:#4f9cf9,stroke-width:2px;
+  classDef off stroke:#ff6b6b,stroke-width:2px,stroke-dasharray:5 5,color:#ff6b6b;
+  class UP,COLAB,DN cloud;
+  class GATE,RT off;
+    </pre>
+    <p class="verdict">Solid arrows = active path · dashed red = disabled / pending removal · blue = cloud (Azure ↔ Colab). Full detail for every node is in the layers below.</p>
+  </div>
+
   <h2>📡 Layer 1 · Market Data Source — MetaTrader 5 (OANDA Terminal, OANDA-Demo-1)</h2>
   <div class="layer">
     <p>The MT5 terminal supplies live tick/OHLCV for every symbol in Market Watch. No symbol list is hardcoded — the EA discovers whatever the broker exposes via <code>SymbolsTotal(true)</code>, skipping disabled / "#" symbols.</p>
@@ -291,8 +328,13 @@
     <li class="q"><b>NEW — Account identity.</b> Baseline header says OANDA acct 1600140290; older notes 1600054407; config 0/blank. Which demo account is the sim actually running on right now?</li>
   </ol>
 
-  <p class="sup">End of flowchart · v3 2026-06-23 · v2 nodes read from source 2026-06-11; v3 deltas (XGBoost→Colab, flat 0.01, tick-value pricing fix, retrainer disabled / Option-A rule, 49-symbol Dukascopy pretrain) reflect the 06-22/06-23 changes · regenerate after the local XGBoost path is removed and the Option-A retrainer is wired.</p>
+  <p class="sup" id="endnote">End of flowchart · v3 2026-06-23 · v2 nodes read from source 2026-06-11; v3 deltas (XGBoost→Colab, flat 0.01, tick-value pricing fix, retrainer disabled / Option-A rule, 49-symbol Dukascopy pretrain) reflect the 06-22/06-23 changes · regenerate after the local XGBoost path is removed and the Option-A retrainer is wired.</p>
 
 </div>
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+  mermaid.initialize({ startOnLoad: true, theme: 'dark', securityLevel: 'loose',
+                       flowchart: { useMaxWidth: true, htmlLabels: true } });
+</script>
 </body>
 </html>
